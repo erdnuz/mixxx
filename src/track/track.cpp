@@ -925,6 +925,18 @@ void Track::setWaveform(ConstWaveformPointer pWaveform) {
     emit waveformUpdated();
 }
 
+void Track::reloadStructure() {
+    auto pStructure = mixxx::TrackStructure::fromSidecar(getLocation());
+    {
+        const auto locked = lockMutex(&m_qMutex);
+        if (!pStructure && !m_pStructure) {
+            return;
+        }
+        m_pStructure = std::move(pStructure);
+    }
+    emit structureUpdated();
+}
+
 ConstWaveformPointer Track::getWaveformSummary() const {
     return m_waveformSummary;
 }

@@ -76,6 +76,8 @@ class BaseTrackPlayer : public BasePlayer {
     void trackMenuChangeRequest(bool show);
 };
 
+class PhraseControl;
+
 class BaseTrackPlayerImpl : public BaseTrackPlayer {
     Q_OBJECT
   public:
@@ -193,6 +195,9 @@ class BaseTrackPlayerImpl : public BaseTrackPlayer {
     // Stems color
     std::vector<std::unique_ptr<ControlObject>> m_pStemColors;
 #endif
+
+    // Bars/phrases/sections of the loaded track (structure sidecar files)
+    parented_ptr<PhraseControl> m_pPhraseControl;
 
     // Waveform display related controls
     std::unique_ptr<ControlObject> m_pWaveformZoom;

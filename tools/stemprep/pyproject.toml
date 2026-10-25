@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "stemprep"
+version = "0.1.0"
+description = "Spotify playlists -> stems + bars/phrases/drops for Mixxx"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "GPL-2.0-or-later" }
+dependencies = [
+    "numpy>=1.24",
+    "torch>=2.1",
+    "torchaudio>=2.1",
+    "demucs>=4.1.0",
+    "beat-this>=1.1",
+    "spotdl>=4.2",
+    "soxr",
+]
+
+[project.scripts]
+stemprep = "stemprep.cli:main"
+
+[tool.setuptools]
+packages = ["stemprep"]

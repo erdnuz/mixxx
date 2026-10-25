@@ -17,6 +17,7 @@
 #endif
 #include "track/track_decl.h"
 #include "track/trackrecord.h"
+#include "track/trackstructure.h"
 #include "util/color/predefinedcolorpalettes.h"
 #include "util/compatibility/qmutex.h"
 #include "util/fileaccess.h"
@@ -296,6 +297,16 @@ class Track : public QObject {
     const ConstWaveformPointer& getWaveform() const;
     void setWaveform(ConstWaveformPointer pWaveform);
 
+    /// Bars, phrases and sections from "<file>.structure.json", written by
+    /// the stemprep analyzer. nullptr if the track has none.
+    mixxx::TrackStructurePointer getStructure() const {
+        const auto locked = lockMutex(&m_qMutex);
+        return m_pStructure;
+    }
+    /// (Re-)read the structure file next to the track. Emits
+    /// structureUpdated() if anything changed.
+    void reloadStructure();
+
     ConstWaveformPointer getWaveformSummary() const;
     void setWaveformSummary(ConstWaveformPointer pWaveform);
 
@@ -483,6 +494,7 @@ class Track : public QObject {
     void infoChanged();
 
     void waveformUpdated();
+    void structureUpdated();
     void waveformSummaryUpdated();
     void coverArtUpdated();
     void beatsUpdated();
@@ -625,6 +637,10 @@ class Track : public QObject {
     QStack<mixxx::BeatsPointer> m_pBeatsUndoStack;
     bool m_undoingBeatsChange;
     PerformanceTimer m_beatChangeTimer;
+
+    // Bars/phrases/sections from the structure sidecar file (not stored in
+    // the library database)
+    mixxx::TrackStructurePointer m_pStructure;
 
     // Visual waveform data
     ConstWaveformPointer m_waveform;

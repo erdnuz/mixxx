@@ -1,0 +1,313 @@
+#include "mixer/phrasecontrol.h"
+
+#include <cmath>
+
+#include "control/controlobject.h"
+#include "control/controlproxy.h"
+#include "control/controlpushbutton.h"
+#include "moc_phrasecontrol.cpp"
+#include "track/track.h"
+#include "track/trackstructure.h"
+#include "util/color/rgbcolor.h"
+#include "util/defs.h"
+#include "util/logger.h"
+
+namespace {
+
+const mixxx::Logger kLogger("PhraseControl");
+
+const QString kConfigGroup = QStringLiteral("[Structure]");
+const QString kAutoHotcuesKey = QStringLiteral("AutoHotcues");
+// Only fill the first 8 hot cues: that's what fits on most controllers.
+constexpr int kMaxAutoHotcueSlots = 8;
+
+} // namespace
+
+PhraseControl::PhraseControl(const QString& group,
+        UserSettingsPointer pConfig,
+        QObject* pParent)
+        : QObject(pParent),
+          m_group(group),
+          m_pConfig(pConfig) {
+    m_pStructureLoaded = std::make_unique<ControlObject>(
+            ConfigKey(group, QStringLiteral("structure_loaded")));
+    m_pStructureLoaded->setReadOnly();
+
+    m_pBeatsUntilPhrase = std::make_unique<ControlObject>(
+            ConfigKey(group, QStringLiteral("beats_until_phrase")));
+    m_pBeatsUntilPhrase->setReadOnly();
+    m_pSectionIndex = std::make_unique<ControlObject>(
+            ConfigKey(group, QStringLiteral("section_index")));
+    m_pSectionIndex->setReadOnly();
+    m_pSectionIndex->forceSet(-1);
+
+    m_pReload = std::make_unique<ControlPushButton>(
+            ConfigKey(group, QStringLiteral("structure_reload")));
+    connect(m_pReload.get(), &ControlObject::valueChanged, this, [this](double value) {
+        if (value > 0 && m_pTrack) {
+            m_pTrack->reloadStructure();
+        }
+    });
+
+    const auto makeJump = [this, &group](std::unique_ptr<ControlPushButton>* pButton,
+                                  const QString& name,
+                                  Target target,
+                                  int direction) {
+        *pButton = std::make_unique<ControlPushButton>(ConfigKey(group, name));
+        connect(pButton->get(),
+                &ControlObject::valueChanged,
+                this,
+                [this, target, direction](double value) {
+                    if (value > 0) {
+                        jump(target, direction);
+                    }
+                });
+    };
+    makeJump(&m_pPhraseForward, QStringLiteral("phrase_jump_forward"), Target::Phrase, 1);
+    makeJump(&m_pPhraseBackward, QStringLiteral("phrase_jump_backward"), Target::Phrase, -1);
+    makeJump(&m_pSectionForward, QStringLiteral("section_jump_forward"), Target::Section, 1);
+    makeJump(&m_pSectionBackward,
+            QStringLiteral("section_jump_backward"),
+            Target::Section,
+            -1);
+
+    m_pPlayPosition = make_parented<ControlProxy>(group, QStringLiteral("playposition"), this);
+    m_pPlayPosition->connectValueChanged(this, &PhraseControl::slotPositionChanged);
+    m_pTrackSamples = make_parented<ControlProxy>(group, QStringLiteral("track_samples"), this);
+    m_pBeatJump = make_parented<ControlProxy>(group, QStringLiteral("beatjump"), this);
+}
+
+PhraseControl::~PhraseControl() = default;
+
+void PhraseControl::trackLoaded(TrackPointer pTrack) {
+    if (m_pTrack) {
+        disconnect(m_pTrack.get(), nullptr, this, nullptr);
+    }
+    m_pTrack = std::move(pTrack);
+    m_pCuesAddedTrack = nullptr;
+    if (m_pTrack) {
+        connect(m_pTrack.get(),
+                &Track::structureUpdated,
+                this,
+                &PhraseControl::slotStructureOrBeatsChanged);
+        connect(m_pTrack.get(),
+                &Track::beatsUpdated,
+                this,
+                &PhraseControl::slotStructureOrBeatsChanged);
+        // Pick up files written by stemprep since the track was last loaded.
+        m_pTrack->reloadStructure();
+    }
+    slotStructureOrBeatsChanged();
+}
+
+void PhraseControl::slotStructureOrBeatsChanged() {
+    const TrackPointer pTrack = m_pTrack;
+    const bool loaded = pTrack && pTrack->getStructure();
+    m_pStructureLoaded->forceSet(loaded ? 1.0 : 0.0);
+    if (loaded) {
+        maybeAddCues(pTrack);
+    }
+    updateStatus();
+}
+
+void PhraseControl::slotPositionChanged(double playPosition) {
+    Q_UNUSED(playPosition);
+    updateStatus();
+}
+
+bool PhraseControl::currentBeat(const TrackPointer& pTrack, int* pBeatIndex) const {
+    const auto pBeats = pTrack->getBeats();
+    const double trackSamples = m_pTrackSamples->get();
+    if (!pBeats || trackSamples <= 0) {
+        return false;
+    }
+    const auto position = mixxx::audio::FramePos::fromEngineSamplePos(
+            m_pPlayPosition->get() * trackSamples);
+    if (!position.isValid()) {
+        return false;
+    }
+    *pBeatIndex = mixxx::TrackStructure::beatIndexAtOrBefore(*pBeats, position);
+    return true;
+}
+
+void PhraseControl::updateStatus() {
+    const TrackPointer pTrack = m_pTrack;
+    const auto pStructure = pTrack ? pTrack->getStructure() : nullptr;
+    const auto pBeats = pTrack ? pTrack->getBeats() : nullptr;
+    int beat = 0;
+    if (!pStructure || !pBeats || !currentBeat(pTrack, &beat)) {
+        m_pBeatsUntilPhrase->forceSet(0);
+        m_pSectionIndex->forceSet(-1);
+        return;
+    }
+    const auto pAlignment = pStructure->alignTo(pBeats);
+    if (!pAlignment) {
+        return;
+    }
+    int until = 0;
+    for (int phrase : pAlignment->sortedPhraseStarts()) {
+        if (phrase > beat) {
+            until = phrase - beat;
+            break;
+        }
+    }
+    m_pBeatsUntilPhrase->forceSet(until);
+    int sectionIndex = -1;
+    for (int i = 0; i < pAlignment->sections.size(); ++i) {
+        const auto& section = pAlignment->sections.at(i);
+        if (beat >= section.startBeat && beat < section.endBeat) {
+            sectionIndex = i;
+            break;
+        }
+    }
+    m_pSectionIndex->forceSet(sectionIndex);
+}
+
+void PhraseControl::jump(Target target, int direction) {
+    const TrackPointer pTrack = m_pTrack;
+    if (!pTrack) {
+        return;
+    }
+    const auto pStructure = pTrack->getStructure();
+    const auto pBeats = pTrack->getBeats();
+    int beat = 0;
+    if (!pStructure || !pBeats || !currentBeat(pTrack, &beat)) {
+        return;
+    }
+    const auto pAlignment = pStructure->alignTo(pBeats);
+    if (!pAlignment) {
+        return;
+    }
+
+    QList<int> starts;
+    if (target == Target::Phrase) {
+        starts = pAlignment->sortedPhraseStarts();
+    } else {
+        for (const auto& section : pAlignment->sections) {
+            starts.append(section.startBeat);
+        }
+    }
+    if (starts.isEmpty()) {
+        return;
+    }
+
+    // Jump by whole bars measured from the start of the current bar, so the
+    // position inside the bar (and the phase against other decks) is kept.
+    const int barStart = pAlignment->barStartAtOrBefore(beat);
+    int destination = 0;
+    bool found = false;
+    if (direction > 0) {
+        for (int start : starts) {
+            if (start > barStart) {
+                destination = start;
+                found = true;
+                break;
+            }
+        }
+    } else {
+        for (auto it = starts.crbegin(); it != starts.crend(); ++it) {
+            if (*it < barStart) {
+                destination = *it;
+                found = true;
+                break;
+            }
+        }
+    }
+    if (!found) {
+        return;
+    }
+    m_pBeatJump->set(static_cast<double>(destination - barStart));
+}
+
+void PhraseControl::maybeAddCues(const TrackPointer& pTrack) {
+    if (!m_group.startsWith(QStringLiteral("[Channel"))) {
+        return; // decks only, not samplers or preview
+    }
+    if (!m_pConfig->getValue(ConfigKey(kConfigGroup, kAutoHotcuesKey), true)) {
+        return;
+    }
+    if (m_pCuesAddedTrack == pTrack.get()) {
+        return;
+    }
+    const auto pStructure = pTrack->getStructure();
+    const auto pBeats = pTrack->getBeats();
+    if (!pStructure || !pBeats || pStructure->cuesApplied() ||
+            pStructure->cueSuggestions().isEmpty()) {
+        return;
+    }
+    const auto pAlignment = pStructure->alignTo(pBeats);
+    if (!pAlignment || pAlignment->confidence < 0.5) {
+        // The downbeats don't agree with this beat grid; don't add cues in
+        // the wrong place.
+        kLogger.info() << "Not adding structure cues: downbeat confidence"
+                       << (pAlignment ? pAlignment->confidence : 0.0);
+        return;
+    }
+
+    // Mark first so a failure below can't make this run again and again.
+    m_pCuesAddedTrack = pTrack.get();
+    const bool marked = mixxx::TrackStructure::markCuesApplied(pTrack->getLocation());
+
+    QList<bool> usedSlots(kMaxAutoHotcueSlots, false);
+    QList<mixxx::audio::FramePos> existing;
+    for (const auto& pCue : pTrack->getCuePoints()) {
+        if (pCue->getType() != mixxx::CueType::HotCue) {
+            continue;
+        }
+        const int index = pCue->getHotCue();
+        if (index >= 0 && index < kMaxAutoHotcueSlots) {
+            usedSlots[index] = true;
+        }
+        existing.append(pCue->getPosition());
+    }
+
+    int added = 0;
+    for (const auto& suggestion : pStructure->cueSuggestions()) {
+        const auto index = mixxx::TrackStructure::closestBeatIndex(
+                *pBeats, suggestion.positionSeconds);
+        if (!index) {
+            continue;
+        }
+        const auto position = mixxx::TrackStructure::beatPosition(
+                *pBeats, pAlignment->snapToBar(*index));
+        if (!position.isValid()) {
+            continue;
+        }
+        // Skip if the user already has a hot cue within a beat of it.
+        const auto beatLength = std::abs(
+                mixxx::TrackStructure::beatPosition(*pBeats, *index + 1) -
+                mixxx::TrackStructure::beatPosition(*pBeats, *index));
+        bool duplicate = false;
+        for (const auto& other : existing) {
+            if (other.isValid() && std::abs(other - position) < beatLength) {
+                duplicate = true;
+                break;
+            }
+        }
+        if (duplicate) {
+            continue;
+        }
+        int slot = usedSlots.indexOf(false);
+        if (slot < 0) {
+            break;
+        }
+        usedSlots[slot] = true;
+        const auto color = mixxx::RgbColor::fromQColor(suggestion.color,
+                mixxx::PredefinedColorPalettes::kDefaultCueColor);
+        CuePointer pCue = pTrack->createAndAddCue(mixxx::CueType::HotCue,
+                slot,
+                position,
+                mixxx::audio::kInvalidFramePos,
+                color.value_or(mixxx::PredefinedColorPalettes::kDefaultCueColor));
+        if (pCue) {
+            pCue->setLabel(suggestion.label);
+            existing.append(position);
+            added++;
+        }
+    }
+    kLogger.info() << "Added" << added << "structure hot cues to" << pTrack->getInfo();
+    if (marked) {
+        // Re-read so cuesApplied() is true in memory as well.
+        pTrack->reloadStructure();
+    }
+}

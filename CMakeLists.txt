@@ -1449,6 +1449,7 @@ add_library(
   src/mixer/basetrackplayer.cpp
   src/mixer/deck.cpp
   src/mixer/microphone.cpp
+  src/mixer/phrasecontrol.cpp
   src/mixer/playerinfo.cpp
   src/mixer/playermanager.cpp
   src/mixer/previewdeck.cpp
@@ -1580,6 +1581,7 @@ add_library(
   src/track/tracknumbers.cpp
   src/track/trackrecord.cpp
   src/track/trackref.cpp
+  src/track/trackstructure.cpp
   src/util/autofilereloader.cpp
   src/util/battery/battery.cpp
   src/util/cache.cpp
@@ -2808,6 +2810,7 @@ if(BUILD_TESTING)
     src/test/trackmetadataexport_test.cpp
     src/test/tracknumberstest.cpp
     src/test/trackreftest.cpp
+    src/test/trackstructuretest.cpp
     src/test/trackupdate_test.cpp
     src/test/uuid_test.cpp
     src/test/wbatterytest.cpp

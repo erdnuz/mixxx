@@ -2,12 +2,15 @@
 
 #include <QBrush>
 #include <QColor>
+#include <QFont>
+#include <QFontMetrics>
 #include <QGuiApplication>
 #include <QMouseEvent>
 #include <QPaintEvent>
 #include <QPainter>
 #include <QPen>
 #include <QVBoxLayout>
+#include <algorithm>
 
 #include "analyzer/analyzerprogress.h"
 #include "control/controlproxy.h"
@@ -386,6 +389,10 @@ void WOverview::slotLoadingTrack(TrackPointer pNewTrack, TrackPointer pOldTrack)
                 &Track::cuesUpdated,
                 this,
                 &WOverview::receiveCuesUpdated);
+        disconnect(m_pCurrentTrack.get(),
+                &Track::structureUpdated,
+                this,
+                nullptr);
     }
 
     m_waveformSourceImage = QImage();
@@ -416,6 +423,10 @@ void WOverview::slotLoadingTrack(TrackPointer pNewTrack, TrackPointer pOldTrack)
                 this,
                 &WOverview::receiveCuesUpdated,
                 Qt::QueuedConnection);
+        connect(pNewTrack.get(),
+                &Track::structureUpdated,
+                this,
+                [this] { update(); });
     } else {
         m_pCurrentTrack.reset();
         m_pWaveform.clear();
@@ -724,6 +735,7 @@ void WOverview::paintEvent(QPaintEvent* pEvent) {
         drawWaveformPixmap(&painter);
         drawPlayedOverlay(&painter);
         drawMinuteMarkers(&painter);
+        drawStructure(&painter);
         drawPlayPosition(&painter);
         drawEndOfTrackFrame(&painter);
         drawAnalyzerProgress(&painter);
@@ -863,6 +875,58 @@ void WOverview::drawMinuteMarkers(QPainter* pPainter) {
             pPainter->drawLine(line);
             line.setLine(lowerMarkerYPos, currentMarkerXPos, overviewHeight, currentMarkerXPos);
             pPainter->drawLine(line);
+        }
+    }
+}
+
+void WOverview::drawStructure(QPainter* pPainter) {
+    // Colored section strip (Intro, Build, Drop, Breakdown...) along the
+    // bottom of the overview, like a phrase bar, with the section names
+    // where they fit.
+    if (!m_trackLoaded || !m_pCurrentTrack) {
+        return;
+    }
+    const auto pStructure = m_pCurrentTrack->getStructure();
+    const double duration = m_pCurrentTrack->getDuration();
+    if (!pStructure || pStructure->sections().isEmpty() || duration <= 0) {
+        return;
+    }
+    PainterScope painterScope(pPainter);
+    const bool horizontal = m_orientation == Qt::Horizontal;
+    const double length = horizontal ? width() : height();
+    const double breadth = horizontal ? height() : width();
+    const double stripBreadth = std::max(4.0, breadth * 0.12);
+    const double stripStart = breadth - stripBreadth;
+
+    QFont font = pPainter->font();
+    font.setPixelSize(std::max(7, static_cast<int>(stripBreadth * 0.8)));
+    font.setBold(true);
+    pPainter->setFont(font);
+    const QFontMetrics metrics(font);
+
+    for (const auto& section : pStructure->sections()) {
+        const double x1 = section.startSeconds / duration * length;
+        const double x2 = std::min(section.endSeconds, duration) / duration * length;
+        if (x2 <= x1) {
+            continue;
+        }
+        QColor color = section.color;
+        color.setAlphaF(0.8f);
+        const QRectF rect = horizontal
+                ? QRectF(x1, stripStart, x2 - x1, stripBreadth)
+                : QRectF(stripStart, x1, stripBreadth, x2 - x1);
+        pPainter->fillRect(rect, color);
+        // Thin separator so neighbouring sections of similar color stay apart
+        pPainter->setPen(QPen(m_backgroundColor, 1));
+        if (horizontal) {
+            pPainter->drawLine(QPointF(x1, stripStart), QPointF(x1, breadth));
+        } else {
+            pPainter->drawLine(QPointF(stripStart, x1), QPointF(breadth, x1));
+        }
+        const QString label = section.label.toUpper();
+        if (horizontal && metrics.horizontalAdvance(label) + 4 < x2 - x1) {
+            pPainter->setPen(color.lightnessF() > 0.6 ? Qt::black : Qt::white);
+            pPainter->drawText(rect.adjusted(2, 0, 0, 0), Qt::AlignLeft | Qt::AlignVCenter, label);
         }
     }
 }

@@ -13,6 +13,7 @@
 #include "engine/enginebuffer.h"
 #include "engine/enginemixer.h"
 #include "engine/sync/enginesync.h"
+#include "mixer/phrasecontrol.h"
 #include "mixer/playerinfo.h"
 #include "mixer/playermanager.h"
 #include "moc_basetrackplayer.cpp"
@@ -82,6 +83,8 @@ BaseTrackPlayerImpl::BaseTrackPlayerImpl(
             this,
             // signal-to-signal
             &BaseTrackPlayerImpl::noVinylControlInputConfigured);
+
+    m_pPhraseControl = make_parented<PhraseControl>(getGroup(), pConfig, this);
 
     m_pEject = std::make_unique<ControlPushButton>(ConfigKey(getGroup(), "eject"));
     connect(m_pEject.get(),
@@ -587,6 +590,7 @@ void BaseTrackPlayerImpl::slotTrackLoaded(TrackPointer pNewTrack,
         m_pLoopInPoint->set(kNoTrigger);
         m_pLoopOutPoint->set(kNoTrigger);
         m_pLoadedTrack.reset();
+        m_pPhraseControl->trackLoaded(nullptr);
         emit playerEmpty();
         emit trackRatingChanged(0);
     } else if (pNewTrack && pNewTrack == m_pLoadedTrack) {
@@ -691,6 +695,8 @@ void BaseTrackPlayerImpl::slotTrackLoaded(TrackPointer pNewTrack,
             m_pStemColors[stemIdx]->forceSet(color);
         }
 #endif
+
+        m_pPhraseControl->trackLoaded(m_pLoadedTrack);
 
         emit newTrackLoaded(m_pLoadedTrack);
         emit trackRatingChanged(m_pLoadedTrack->getRating());

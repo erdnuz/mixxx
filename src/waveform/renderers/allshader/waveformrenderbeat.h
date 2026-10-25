@@ -38,6 +38,9 @@ class allshader::WaveformRenderBeat final
 
   private:
     QColor m_color;
+    // Colors used when the track has bar/phrase data (TrackStructure)
+    QColor m_barColor;
+    QColor m_phraseColor;
     bool m_isSlipRenderer;
 
     bool preprocessInner();
