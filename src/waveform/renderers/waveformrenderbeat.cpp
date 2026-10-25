@@ -3,6 +3,7 @@
 #include <QPainter>
 
 #include "track/track.h"
+#include "track/trackstructure.h"
 #include "util/painterscope.h"
 #include "waveform/renderers/waveformwidgetrenderer.h"
 #include "widget/wskincolor.h"
@@ -88,7 +89,19 @@ void WaveformRenderBeat::draw(QPainter* painter, QPaintEvent* /*event*/) {
 
     int beatCount = 0;
 
-    for (; it != trackBeats->cend() && *it <= endPosition; ++it) {
+    // Bars and phrases from the track's structure file, if any
+    std::shared_ptr<const mixxx::TrackStructure::Alignment> pAlignment;
+    if (const auto pStructure = pTrackInfo->getStructure()) {
+        pAlignment = pStructure->alignTo(trackBeats);
+        if (pAlignment && pAlignment->confidence < 0.5) {
+            pAlignment.reset();
+        }
+    }
+    QVector<QLineF> barLines;
+    QVector<QPair<QLineF, QColor>> phraseLines;
+    int beatIndex = pAlignment ? (it - trackBeats->cfirstmarker()) : 0;
+
+    for (; it != trackBeats->cend() && *it <= endPosition; ++it, ++beatIndex) {
         double beatPosition = it->toEngineSamplePos();
         double xBeatPoint =
                 m_waveformRenderer->transformSamplePositionInRendererWorld(beatPosition);
@@ -100,13 +113,35 @@ void WaveformRenderBeat::draw(QPainter* painter, QPaintEvent* /*event*/) {
             m_beats.resize(m_beats.size() * 2);
         }
 
-        if (orientation == Qt::Horizontal) {
-            m_beats[beatCount++].setLine(xBeatPoint, 0.0f, xBeatPoint, rendererHeight);
+        const QLineF line = orientation == Qt::Horizontal
+                ? QLineF(xBeatPoint, 0.0f, xBeatPoint, rendererHeight)
+                : QLineF(0.0f, xBeatPoint, rendererWidth, xBeatPoint);
+        if (pAlignment && pAlignment->isPhraseStart(beatIndex)) {
+            const auto* pSection = pAlignment->sectionAt(beatIndex);
+            const QColor color = (pSection && pSection->startBeat == beatIndex)
+                    ? pSection->color
+                    : QColor(0xFF, 0xB0, 0x00);
+            phraseLines.append({line, color});
+        } else if (pAlignment && pAlignment->isBarStart(beatIndex)) {
+            barLines.append(line);
         } else {
-            m_beats[beatCount++].setLine(0.0f, xBeatPoint, rendererWidth, xBeatPoint);
+            m_beats[beatCount++] = line;
         }
     }
 
     // Make sure to use constData to prevent detaches!
     painter->drawLines(m_beats.constData(), beatCount);
+
+    if (!barLines.isEmpty()) {
+        QPen barPen(m_beatColor.lighter(150));
+        barPen.setWidthF(std::max(2.0, 2 * scaleFactor()));
+        painter->setPen(barPen);
+        painter->drawLines(barLines.constData(), static_cast<int>(barLines.size()));
+    }
+    for (const auto& phraseLine : std::as_const(phraseLines)) {
+        QPen phrasePen(phraseLine.second);
+        phrasePen.setWidthF(std::max(3.0, 3 * scaleFactor()));
+        painter->setPen(phrasePen);
+        painter->drawLine(phraseLine.first);
+    }
 }
