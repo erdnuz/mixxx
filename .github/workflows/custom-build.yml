@@ -1,0 +1,155 @@
+# yaml-language-server: $schema=https://json.schemastore.org/github-workflow
+#
+# Custom DJ build (erdnuz/mixxx): builds a portable Windows x64 zip on every
+# push to custom-* branches, plus a quicker Linux compile + unit tests so build
+# errors show up early. The upstream "develop" workflow is switched to manual
+# only on this fork so it doesn't run the full macOS/Linux/Windows matrix.
+
+name: Custom build
+
+on:
+  push:
+    branches:
+      - "custom-*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: custom-build-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  linux:
+    name: Linux compile + tests
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Fetch tags
+        run: git fetch origin --force --tags || true
+
+      - name: Set up build environment
+        run: tools/debian_buildenv.sh setup
+        env:
+          BUILDENV_BASEPATH: /home/runner/buildenv
+
+      - name: Restore ccache
+        uses: actions/cache@v6
+        with:
+          path: /home/runner/.cache/ccache
+          key: custom-linux-${{ github.sha }}
+          restore-keys: custom-linux-
+
+      - name: Configure
+        run: >-
+          mkdir -p build && cd build &&
+          cmake -DQT6=ON -DQML=ON -DFFMPEG=ON -DSTEM=ON -DMAD=ON -DWAVPACK=ON
+          -DMODPLUG=ON -DINSTALL_USER_UDEV_RULES=OFF
+          -DCMAKE_BUILD_TYPE=RelWithDebInfo -DWARNINGS_FATAL=ON
+          -DDEBUG_ASSERTIONS_FATAL=OFF
+          -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+          ..
+
+      - name: Problem matcher
+        uses: ammaraskar/gcc-problem-matcher@0.3.0
+
+      - name: Build
+        run: cmake --build build --parallel "$(nproc)"
+
+      - name: Unit tests (structure + beats)
+        run: >-
+          cd build &&
+          ./mixxx-test --gtest_filter='TrackStructure*:BeatsTest*:BeatGrid*:BeatMap*'
+        env:
+          QT_QPA_PLATFORM: offscreen
+
+  windows:
+    name: Windows x64 portable zip
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Fetch tags
+        run: git fetch origin --force --tags; exit 0
+        shell: pwsh
+
+      - name: Set up cmake
+        uses: jwlawson/actions-setup-cmake@v2.2
+        with:
+          cmake-version: "3.30.x"
+
+      - name: Set up MSVC Developer Command Prompt
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Get build environment name
+        run: tools/windows_buildenv.bat name
+
+      - name: Set up build environment
+        shell: cmd
+        run: tools/windows_buildenv.bat setup
+        env:
+          BUILDENV_BASEPATH: C:\buildenv
+          BUILDENV_RELEASE: TRUE
+
+      - name: Configure
+        run: >-
+          mkdir build; cd build;
+          cmake -DBULK=ON -DHSS1394=ON -DLOCALECOMPARE=ON -DMAD=ON
+          -DMEDIAFOUNDATION=ON -DMODPLUG=ON -DQT6=ON -DQML=ON -DWAVPACK=ON
+          -DFFMPEG=ON -DSTEM=ON
+          -DVCPKG_TARGET_TRIPLET=x64-windows-release
+          -DCMAKE_BUILD_TYPE=RelWithDebInfo
+          -DCMAKE_PREFIX_PATH="${{ env.CMAKE_PREFIX_PATH }}"
+          -DWARNINGS_FATAL=ON -DDEBUG_ASSERTIONS_FATAL=OFF
+          -DBATTERY=ON -DBROADCAST=ON -DHID=ON -DKEYFINDER=ON -DLILV=ON
+          -DOPUS=ON -DQTKEYCHAIN=ON -DVINYLCONTROL=ON
+          ..
+        shell: pwsh
+        env:
+          CC: cl
+          CXX: cl
+
+      - name: Problem matcher
+        uses: ammaraskar/msvc-problem-matcher@0.3.0
+
+      - name: Build
+        run: cmake --build . --config RelWithDebInfo
+        working-directory: build
+        env:
+          CC: cl
+          CXX: cl
+
+      - name: Package portable zip
+        shell: pwsh
+        working-directory: build
+        run: |
+          cpack -G ZIP -V
+          $zip = Get-ChildItem -Filter *.zip | Select-Object -First 1
+          Expand-Archive $zip.FullName -DestinationPath portable
+          $root = Get-ChildItem portable -Directory | Select-Object -First 1
+          # Launcher that keeps this build's settings separate from the
+          # installed Mixxx so both can live side by side.
+          $exe = Get-ChildItem $root.FullName -Recurse -Filter mixxx.exe | Select-Object -First 1
+          $rel = $exe.FullName.Substring($root.FullName.Length + 1)
+          Set-Content -Path (Join-Path $root.FullName "Mixxx Custom.bat") -Encoding ascii -Value @(
+            '@echo off',
+            ('start "" "%~dp0' + $rel + '" --settings-path "%LOCALAPPDATA%\Mixxx-Custom" %*')
+          )
+          Copy-Item ../packaging/custom/README-custom.txt $root.FullName -ErrorAction SilentlyContinue
+          Remove-Item $zip.FullName
+          Compress-Archive -Path $root.FullName -DestinationPath "Mixxx-Custom-win64-${{ github.run_number }}.zip"
+
+      - name: Upload portable zip
+        uses: actions/upload-artifact@v7
+        with:
+          name: Mixxx-Custom-win64
+          path: build/Mixxx-Custom-win64-*.zip
+          retention-days: 30

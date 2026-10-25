@@ -1,17 +1,8 @@
 name: Pull request or branch build
 
+# Custom fork: the full upstream CI matrix only runs when started by hand.
+# Pushes are built by custom-build.yml instead.
 on:
-  pull_request:
-    types:
-      - opened
-      - synchronize
-      - reopened
-      - edited
-  push:
-    branches:
-      - "*"
-      - "!main"
-      - "![0-9].[0-9]"
   workflow_dispatch:
 
 permissions:
