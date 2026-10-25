@@ -60,12 +60,17 @@ jobs:
       - name: Build
         run: cmake --build build --parallel "$(nproc)"
 
-      - name: Unit tests (structure + beats)
+      - name: Unit tests (structure, beats, controller mappings)
         run: >-
           cd build &&
-          ./mixxx-test --gtest_filter='TrackStructure*:BeatsTest*:BeatGrid*:BeatMap*'
+          ./mixxx-test --gtest_filter='TrackStructure*:BeatsTest*:BeatGrid*:BeatMap*:MidiMappings/*'
         env:
           QT_QPA_PLATFORM: offscreen
+
+      - name: stemprep structure tests
+        run: |
+          sudo apt-get install -y python3-numpy
+          python3 tools/stemprep/tests/test_structure.py
 
   windows:
     name: Windows x64 portable zip
