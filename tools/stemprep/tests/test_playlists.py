@@ -16,6 +16,8 @@ class FakeDownloader:
     def __init__(self):
         self.songs = [song(1), song(2), song(3)]
         self.downloaded = []
+        self.unavailable = set()  # song ids with no match
+        self.tried = []
 
     def fetch(self, url):
         return "130 fweak", list(self.songs)
@@ -24,6 +26,9 @@ class FakeDownloader:
         folder.mkdir(parents=True, exist_ok=True)
         out = {}
         for s in songs:
+            self.tried.append(s.song_id)
+            if s.song_id in self.unavailable:
+                continue
             # an mp3 that was already there counts, like SpotifyDownloader.find_existing
             existing = folder / f"Artist {s.song_id[2:]} - {s.name}.mp3"
             if existing.exists():
@@ -84,6 +89,42 @@ def test_sync():
         assert store.remove(URL) is entry and store.playlists == []
 
 
+def test_failed_downloads_are_not_retried_every_sync():
+    with tempfile.TemporaryDirectory() as d:
+        root = Path(d)
+        downloads = root / "Downloads"
+        store = PlaylistStore(root)
+        entry = store.add(URL)
+        dl = FakeDownloader()
+        dl.unavailable = {"id2"}
+        r = sync_playlist(entry, dl, downloads)
+        assert r.failed == 1 and r.skipped == []
+        t2 = next(t for t in entry["tracks"] if t["id"] == "id2")
+        assert t2["download_failed"] and t2["download_attempts"] == 1
+
+        # next sync: not tried again, still counted as not downloaded
+        dl.tried = []
+        r = sync_playlist(entry, dl, downloads)
+        assert dl.tried == [] and r.failed == 1
+        assert [t["id"] for t in r.skipped] == ["id2"]
+
+        # --retry-failed, and it works now: the failure is forgotten
+        dl.unavailable = set()
+        r = sync_playlist(entry, dl, downloads, retry_failed=True)
+        assert dl.tried == ["id2"] and r.failed == 0 and len(r.files) == 3
+        assert "download_failed" not in t2 and "download_attempts" not in t2
+
+        # a week later it's tried again by itself
+        dl.unavailable = {"id3"}
+        sync_playlist(entry, dl, downloads.parent / "Other")  # files missing: re-download
+        t3 = next(t for t in entry["tracks"] if t["id"] == "id3")
+        t3["download_failed"] = "2000-01-01T00:00:00"
+        dl.tried = []
+        sync_playlist(entry, dl, downloads.parent / "Other")
+        assert "id3" in dl.tried
+
+
 if __name__ == "__main__":
     test_sync()
+    test_failed_downloads_are_not_retried_every_sync()
     print("ok")

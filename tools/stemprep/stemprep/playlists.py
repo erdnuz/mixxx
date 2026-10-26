@@ -6,12 +6,17 @@ State lives in <root>/playlists.json:
      {"url": ..., "id": "playlist:37i9...", "name": "130 fweak", "folder": "130 fweak",
       "added": "2026-10-25T21:00:00", "last_sync": ...,
       "tracks": [{"id": <spotify track id>, "title": ..., "artists": ...,
-                  "file": "130 fweak/Artist - Title.mp3", "removed": null}]}]}
+                  "file": "130 fweak/Artist - Title.mp3", "removed": null,
+                  "download_failed": null, "download_attempts": 0}]}]}
 
 A sync reads the playlist listing, downloads only tracks we don't have yet,
 and marks tracks that disappeared from the playlist as removed (their files
 are kept). The caller then makes stems for the new tracks and writes an
 M3U playlist (in Spotify order) that Mixxx can import.
+
+A track whose download failed is skipped by later syncs for a week (no
+match on YouTube usually stays that way for a while); `--retry-failed`
+tries them all again now.
 """
 
 from __future__ import annotations
@@ -28,10 +33,24 @@ from .download import SpotifyDownloader, safe_folder_name, spotify_id
 log = logging.getLogger("stemprep")
 
 STATE_FILE = "playlists.json"
+TIME_FORMAT = "%Y-%m-%dT%H:%M:%S"
+RETRY_FAILED_AFTER_DAYS = 7
 
 
 def _now() -> str:
-    return time.strftime("%Y-%m-%dT%H:%M:%S")
+    return time.strftime(TIME_FORMAT)
+
+
+def _skip_failed(track: dict) -> bool:
+    """True if the track's download failed less than a week ago."""
+    failed = track.get("download_failed")
+    if not failed:
+        return False
+    try:
+        age = time.time() - time.mktime(time.strptime(failed, TIME_FORMAT))
+    except ValueError:
+        return False
+    return age < RETRY_FAILED_AFTER_DAYS * 86400
 
 
 class PlaylistStore:
@@ -89,10 +108,12 @@ class SyncResult:
     files: List[Path] = field(default_factory=list)  # current tracks, Spotify order
     new: List[Path] = field(default_factory=list)
     removed: List[dict] = field(default_factory=list)
-    failed: int = 0
+    failed: int = 0  # not downloaded (includes skipped)
+    skipped: List[dict] = field(default_factory=list)  # failed before, not tried again
 
 
-def sync_playlist(entry: dict, downloader: SpotifyDownloader, download_dir: Path) -> SyncResult:
+def sync_playlist(entry: dict, downloader: SpotifyDownloader, download_dir: Path,
+                  retry_failed: bool = False) -> SyncResult:
     name, songs = downloader.fetch(entry["url"])
     entry["name"] = name
     if not entry["folder"]:
@@ -107,8 +128,12 @@ def sync_playlist(entry: dict, downloader: SpotifyDownloader, download_dir: Path
         t = known.get(song.song_id)
         if t and t.get("file") and (download_dir / t["file"]).exists():
             continue
+        if t and not retry_failed and _skip_failed(t):
+            result.skipped.append(t)
+            continue
         to_download.append(song)
     got = downloader.download(to_download, folder) if to_download else {}
+    tried = {song.song_id for song in to_download}
 
     first_sync = entry["last_sync"] is None
     current = []
@@ -127,8 +152,13 @@ def sync_playlist(entry: dict, downloader: SpotifyDownloader, download_dir: Path
             t["file"] = path.relative_to(download_dir).as_posix()
         if t.get("file") and (download_dir / t["file"]).exists():
             result.files.append(download_dir / t["file"])
+            t.pop("download_failed", None)
+            t.pop("download_attempts", None)
         else:
             result.failed += 1
+            if song.song_id in tried:
+                t["download_failed"] = _now()
+                t["download_attempts"] = t.get("download_attempts", 0) + 1
         current.append(t)
 
     ids = {s.song_id for s in songs}

@@ -600,20 +600,35 @@ def analyze_structure(
     )
 
 
+# Which sections get hot cues when there are more than max_cues: drops
+# first, then grooves, breakdowns and builds (the user's priority), then the
+# intro/outro if slots are left. Mixxx fills the pads in this order, so drops
+# are always on the first pads. Hook/Verse are the drop/groove of
+# low-contrast music.
+CUE_PRIORITY = {"Drop": 0, "Hook": 0, "Groove": 1, "Verse": 1, "Breakdown": 2,
+                "Build": 3, "Intro": 4, "Outro": 4}
+
+
 def suggest_cues(structure: Structure, max_cues: int = 8) -> List[dict]:
-    """Hot cue suggestions at the start of the interesting sections."""
-    wanted = ("Intro", "Build", "Drop", "Breakdown", "Outro", "Hook")
-    cues = []
+    """Hot cue suggestions at the start of the sections, most important
+    first (CUE_PRIORITY; in track order within the same kind)."""
+    ranked = []
+    seen: Dict[str, int] = {}
     for s in structure.sections:
         base = s.label.split(" ")[0]
-        if base not in wanted:
+        if base not in CUE_PRIORITY:
             continue
-        if base == "Intro" and s.start_bar != 0 and cues:
-            continue
-        cues.append({
+        if base == "Intro" and s.start_bar != 0:
+            continue  # only an intro that starts the track
+        # Repeated kinds are numbered like drops ("BREAKDOWN 2"), so every
+        # pad has its own name (Mixxx also tells its cues apart by label)
+        seen[base] = seen.get(base, 0) + 1
+        label = s.label if s.label != base or seen[base] == 1 else f"{base} {seen[base]}"
+        ranked.append((CUE_PRIORITY[base], s.start, {
             "position": round(s.start, 4),
             "bar": s.start_bar,
-            "label": s.label.upper(),
+            "label": label.upper(),
             "color": SECTION_COLORS.get(base, "#FFFFFF"),
-        })
-    return cues[:max_cues]
+        }))
+    ranked.sort(key=lambda r: (r[0], r[1]))
+    return [cue for _, _, cue in ranked[:max_cues]]

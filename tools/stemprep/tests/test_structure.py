@@ -116,6 +116,20 @@ def test_synthetic_edm():
         assert detected_starts[start] == label, (label, start, detected_starts[start])
 
 
+def test_cue_priority():
+    """Drops first, then grooves, breakdowns, builds; repeats numbered."""
+    from types import SimpleNamespace
+    labels = ["Intro", "Build", "Drop", "Groove", "Breakdown", "Build", "Drop 2",
+              "Groove", "Breakdown", "Build", "Drop 3", "Outro"]
+    sections = [SimpleNamespace(label=lbl, start=i * 15.0, start_bar=i * 8)
+                for i, lbl in enumerate(labels)]
+    cues = suggest_cues(SimpleNamespace(sections=sections))
+    assert [c["label"] for c in cues] == [
+        "DROP", "DROP 2", "DROP 3", "GROOVE", "GROOVE 2", "BREAKDOWN", "BREAKDOWN 2",
+        "BUILD"], cues
+
+
 if __name__ == "__main__":
     test_synthetic_edm()
+    test_cue_priority()
     print("ok")

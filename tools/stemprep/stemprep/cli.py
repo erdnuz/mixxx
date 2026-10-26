@@ -90,6 +90,8 @@ def build_parser(command: str | None) -> argparse.ArgumentParser:
                            help="Names or links to sync (default: all tracked playlists)")
             p.add_argument("--download-only", action="store_true",
                            help="Only download; make stems later")
+            p.add_argument("--retry-failed", action="store_true",
+                           help="Also try tracks whose download failed in the last week")
         elif command == "remove":
             p.add_argument("playlists", nargs="+", help="Names or links")
         elif command == "reanalyze":
@@ -299,7 +301,7 @@ def run_jobs(jobs, args):
 
 def cmd_sync(args, command) -> int:
     from .download import SpotifyDownloader
-    from .playlists import PlaylistStore, sync_playlist, write_m3u
+    from .playlists import RETRY_FAILED_AFTER_DAYS, PlaylistStore, sync_playlist, write_m3u
 
     store = PlaylistStore(args.root)
     if command == "add":
@@ -330,7 +332,8 @@ def cmd_sync(args, command) -> int:
     results = []
     for e in entries:
         try:
-            r = sync_playlist(e, downloader, downloads)
+            r = sync_playlist(e, downloader, downloads,
+                              retry_failed=getattr(args, "retry_failed", False))
         except Exception as ex:  # one broken playlist shouldn't stop the others
             log.exception("Could not sync %s: %s", e.get("name") or e["url"], ex)
             continue
@@ -340,6 +343,9 @@ def cmd_sync(args, command) -> int:
                  len(r.removed), f", {r.failed} not downloaded" if r.failed else "")
         for t in r.removed:
             log.info("  removed on Spotify (file kept): %s - %s", t["artists"], t["title"])
+        if r.skipped:
+            log.info("  %d failed before, not tried again (retried after %d days, or now "
+                     "with --retry-failed)", len(r.skipped), RETRY_FAILED_AFTER_DAYS)
 
     if not args.download_only:
         jobs = [(f, args.root / "Stems" / r.playlist["folder"]) for r in results for f in r.files]
