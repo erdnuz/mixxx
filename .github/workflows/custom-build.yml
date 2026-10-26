@@ -18,7 +18,7 @@ permissions:
 
 concurrency:
   group: custom-build-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   linux:
@@ -151,6 +151,25 @@ jobs:
           Copy-Item ../packaging/custom/README-custom.txt $root.FullName -ErrorAction SilentlyContinue
           Remove-Item $zip.FullName
           Compress-Archive -Path $root.FullName -DestinationPath "Mixxx-Custom-win64-${{ github.run_number }}.zip"
+
+      - name: Report build contents
+        # Shows up as annotations on the run, readable through the API
+        shell: pwsh
+        working-directory: build
+        run: |
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $zip = Get-ChildItem -Filter Mixxx-Custom-win64-*.zip | Select-Object -First 1
+          $archive = [IO.Compression.ZipFile]::OpenRead($zip.FullName)
+          $names = $archive.Entries | ForEach-Object { $_.Name }
+          foreach ($c in 'mixxx.exe', 'Pioneer-DDJ-SB2-Stems.midi.xml', 'Pioneer-DDJ-SB2-Stems-scripts.js', 'Mixxx Custom.bat', 'README-custom.txt') {
+            if ($names -contains $c) { echo "::notice::zip has $c" } else { echo "::error::zip is missing $c" }
+          }
+          echo "::notice::zip $([math]::Round($zip.Length / 1MB)) MB, $($archive.Entries.Count) files"
+          $archive.Dispose()
+          $obj = Get-ChildItem -Recurse -Filter 'trackstructure.cpp.obj' -ErrorAction SilentlyContinue | Select-Object -First 1
+          echo "::notice::trackstructure.cpp compiled: $([bool]$obj)"
+          $stem = Select-String -Path CMakeCache.txt -Pattern '^STEM:BOOL=' | Select-Object -First 1
+          echo "::notice::$($stem.Line)"
 
       - name: Upload portable zip
         uses: actions/upload-artifact@v7
