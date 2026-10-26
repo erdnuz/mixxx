@@ -39,9 +39,11 @@ class ControlPushButton;
 /// playing deck: double drops (their DROP + my DROP), handovers (their
 /// BREAKDOWN or OUTRO + my DROP), anything else.
 ///   [ChannelN],cue_sync_mine      hot cue number (1..) on this deck; 0 = its
-///                                 first cue labelled DROP
+///                                 first cue labelled DROP; -1 = its next
+///                                 hot cue from where it is cued
 ///   [ChannelN],cue_sync_theirs    hot cue number on the other deck; 0 = its
-///                                 next cue labelled DROP
+///                                 next cue labelled DROP; -1 = its next hot
+///                                 cue
 ///   [ChannelN],cue_sync_deck      the other deck (1..4); 0 = the reference
 ///                                 deck (see below)
 ///   [ChannelN],cue_sync_lead_bars bars of this deck played before its cue
@@ -55,15 +57,14 @@ class ControlPushButton;
 ///   [ChannelN],sync_step          each press does the next step against the
 ///                                 reference deck. Playing deck: 1. beats
 ///                                 (beatsync) 2. bars (jump by whole beats so
-///                                 the downbeats meet) 3. drops (jump by whole
-///                                 bars so this deck's next drop lands on the
-///                                 reference's next drop). Stopped deck:
-///                                 1. tempo + place in the phrase 2. cue sync
-///                                 of the next drops (cue_sync with both DROP
-///                                 cues; again = cancel). Done steps are
-///                                 skipped, so a synced deck goes on to bars.
-///
-/// Drops are hot cues labelled DROP..., else sections labelled Drop.
+///                                 the downbeats meet) 3. cues (jump by whole
+///                                 bars so this deck's next hot cue lands on
+///                                 the reference's next hot cue). Stopped
+///                                 deck: 1. tempo + place in the phrase
+///                                 2. cue sync of the next hot cues (again =
+///                                 cancel). Done steps are skipped, so a synced
+///                                 deck goes on to bars. A deck without hot
+///                                 cues uses its section starts.
 ///
 /// The reference deck is the sync leader if it is another playing deck with
 /// structure, else another playing deck with structure.
@@ -101,8 +102,8 @@ class BarControl : public QObject {
     /// Returns the beats jumped.
     int phraseSync();
     void syncStep();
-    /// Jump by whole bars so the next drops of both decks meet.
-    void dropSync(const DeckPosition& own, const QString& refGroup, const DeckPosition& ref);
+    /// Jump by whole bars so the next hot cues of both decks meet.
+    void nextCueSync(const DeckPosition& own, const QString& refGroup, const DeckPosition& ref);
     void armPlayOnPhrase(bool arm);
     void armCueSync(bool arm);
     /// cue_sync with these cues and deck (see cue_sync_mine/theirs/deck)
@@ -113,13 +114,14 @@ class BarControl : public QObject {
     void startPlayAt(const QString& referenceGroup, int targetBeat, bool followPhrases);
     void cancelPlayStart();
     void firePlayStart();
-    /// Grid beat of a hot cue (1-based number; 0 = first drop at or after
-    /// fromBeat), or nothing.
+    /// Grid beat of a hot cue (1-based number; 0 = first drop, -1 = first hot
+    /// cue, at or after fromBeat), or nothing.
     static std::optional<int> cueBeat(
             const TrackPointer& pTrack, const DeckPosition& pos, int hotcue, int fromBeat);
-    /// Grid beats of the drops, sorted: hot cues labelled DROP..., or if
-    /// there are none, the starts of sections labelled Drop.
-    static QList<int> dropBeats(const TrackPointer& pTrack, const DeckPosition& pos);
+    /// Grid beats of the hot cues whose label starts with label (empty:
+    /// all), sorted; if there are none, the starts of such sections.
+    static QList<int> cueBeats(
+            const TrackPointer& pTrack, const DeckPosition& pos, const QString& label);
     /// Grid beat closest to a frame position.
     static int closestBeat(const DeckPosition& pos, mixxx::audio::FramePos position);
     void requestStemMask(int mask);

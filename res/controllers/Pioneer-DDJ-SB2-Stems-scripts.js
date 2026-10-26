@@ -63,8 +63,8 @@ PioneerDDJSB2.stemPads = true;
 PioneerDDJSB2.phraseBankPads = true;
 
 // If true, SYNC taps go in steps (sync_step): beats, then bars, then the next
-// drops of both tracks meet (a stopped deck: tempo + phrase, then it starts
-// by itself so the drops meet). Holding SYNC turns sync lock on/off. Needs
+// hot cues of both tracks meet (a stopped deck: tempo + phrase, then it starts
+// by itself so the next hot cues meet). Holding SYNC turns sync lock on/off. Needs
 // structure data on both decks (otherwise a tap is a plain beat sync).
 // false = Mixxx's own SYNC button.
 PioneerDDJSB2.syncAlignsPhrases = true;
@@ -307,7 +307,7 @@ PioneerDDJSB2.Deck = function(deckNumber) {
             if (!PioneerDDJSB2.syncAlignsPhrases) {
                 return;
             }
-            // Tap = next sync step (beats, bars, next drop); hold = sync lock
+            // Tap = next sync step (beats, bars, next hot cues); hold = sync lock
             // on/off
             this.input = function(channel, control, value, status, _group) {
                 if (this.isPress(channel, control, value, status)) {

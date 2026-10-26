@@ -30,7 +30,7 @@ What's new in this build
   turntable; press again to spin back up.
 * Controls for mappings / keyboard ([ChannelN]):
     phrase_jump_forward/backward, section_jump_forward/backward
-    sync_step          next sync step: beats, bars, next drops (see SYNC)
+    sync_step          next sync step: beats, bars, next hot cues (see SYNC)
     phrase_sync        line this deck's phrase position up with the playing deck
     play_on_phrase     start exactly on the playing deck's next phrase
     stem_mask_on_bar   stems to hear from the next downbeat (bit mask)
@@ -46,9 +46,9 @@ In Preferences > Controllers > DDJ-SB2 choose
 
 Transport
 * SYNC tap, in steps against the playing deck: 1st tap beats, 2nd tap bars,
-  3rd tap jumps whole bars so your next drop lands on their next drop.
+  3rd tap jumps whole bars so your next hot cue lands on their next hot cue.
   Stopped deck: 1st tap tempo + place in the phrase, 2nd tap = it starts by
-  itself so both next drops meet (tap again to cancel). Steps already done
+  itself so both next hot cues meet (tap again to cancel). Steps already done
   are skipped. Hold SYNC = sync lock on/off. SHIFT + SYNC = quantize.
 * SHIFT + PLAY: brake to a stop, again = spin back up (PLAY blinks meanwhile).
 * SHIFT + TEMPO slider: key, in semitones (takes over at the current key).

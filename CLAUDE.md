@@ -160,8 +160,9 @@ New files `res/controllers/Pioneer-DDJ-SB2-Stems.midi.xml` +
   options `brakeSeconds` / `softStartSeconds` (null = deck setting); PLAY
   blinks while `brake_active`
 - SYNC tap → `sync_step` (BarControl: playing deck beatsync → bar jump →
-  drop jump so the next drops meet; stopped deck tempo+phrase_sync → cue sync
-  of the next drops; done steps skipped), hold = sync lock toggle
+  bar jump so the next hot cues meet, any label, section starts if none;
+  stopped deck tempo+phrase_sync → cue sync of the next hot cues (-1); done
+  steps skipped), hold = sync lock toggle
   (`syncAlignsPhrases`);
   SHIFT+SYNC LED (0x5C) = quantize. Note: components.SyncButton replaces its
   `input` in unshift()/shift(), so overrides must wrap inside `unshift`.

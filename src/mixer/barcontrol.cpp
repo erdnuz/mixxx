@@ -27,6 +27,8 @@ constexpr double kMinLeadMs = 150;
 // sync_step: decks count as tempo matched / in phase within these
 constexpr double kSameTempoTolerance = 0.002; // 0.2 %
 constexpr double kInPhaseBeats = 0.1;
+// cue_sync_mine/theirs: the next hot cue (any label)
+constexpr int kNextCue = -1;
 
 double get(const QString& group, const char* item) {
     return ControlObject::get(ConfigKey(group, QString::fromLatin1(item)));
@@ -315,9 +317,9 @@ void BarControl::syncStep() {
         }
         if (sameTempo && m_pSyncStepTrack == m_pTrack.get() &&
                 std::abs(own->beat + own->fraction - m_syncStepPosition) < 0.5) {
-            // Not moved since the first step: start with the drops meeting
+            // Not moved since the first step: start so the next hot cues meet
             m_pCueSync->forceSet(1);
-            armCueSyncWith(0, 0, 0);
+            armCueSyncWith(kNextCue, kNextCue, 0);
             return;
         }
         trigger(m_group, "beatsync");
@@ -343,47 +345,47 @@ void BarControl::syncStep() {
         set(m_group, "beatjump", barDelta);
         return;
     }
-    dropSync(*own, refDeck->first, ref);
+    nextCueSync(*own, refDeck->first, ref);
 }
 
-void BarControl::dropSync(
+void BarControl::nextCueSync(
         const DeckPosition& own, const QString& refGroup, const DeckPosition& ref) {
     const auto& a = *own.pAlignment;
     const auto& r = *ref.pAlignment;
-    const QList<int> refDrops = dropBeats(PlayerInfo::instance().getTrackInfo(refGroup), ref);
+    const QList<int> refCues = cueBeats(PlayerInfo::instance().getTrackInfo(refGroup), ref, {});
     // At least a bar ahead
-    const auto refDrop = std::find_if(refDrops.begin(), refDrops.end(), [&](int beat) {
+    const auto refCue = std::find_if(refCues.begin(), refCues.end(), [&](int beat) {
         return beat >= ref.beat + r.beatsPerBar;
     });
-    if (refDrop == refDrops.end()) {
-        kLogger.info() << m_group << "drop sync:" << refGroup << "has no drop ahead";
+    if (refCue == refCues.end()) {
+        kLogger.info() << m_group << "cue sync:" << refGroup << "has no hot cue ahead";
         return;
     }
-    // Time to their drop, in this deck's beats
-    const double refLeft = (*refDrop - ref.beat - ref.fraction) * a.beatsPerBar / r.beatsPerBar;
+    // Time to their cue, in this deck's beats
+    const double refLeft = (*refCue - ref.beat - ref.fraction) * a.beatsPerBar / r.beatsPerBar;
     const double ownNow = own.beat + own.fraction;
     const int firstBeat = mixxx::TrackStructure::beatIndexAtOrBefore(
             *own.pBeats, mixxx::audio::FramePos(0));
-    // This deck's next drop; if it has to start before the track, the one
+    // This deck's next hot cue; if it has to start before the track, the one
     // after; with none left, an earlier one.
-    QList<int> ownDrops = dropBeats(m_pTrack, own);
-    std::stable_partition(ownDrops.begin(), ownDrops.end(), [&](int beat) {
+    QList<int> ownCues = cueBeats(m_pTrack, own, {});
+    std::stable_partition(ownCues.begin(), ownCues.end(), [&](int beat) {
         return beat > ownNow;
     });
-    for (int drop : ownDrops) {
-        const int bars = static_cast<int>(std::lround((drop - refLeft - ownNow) / a.beatsPerBar));
+    for (int cue : ownCues) {
+        const int bars = static_cast<int>(std::lround((cue - refLeft - ownNow) / a.beatsPerBar));
         const int delta = bars * a.beatsPerBar;
         if (own.beat + delta < firstBeat) {
             continue;
         }
-        kLogger.info() << m_group << "drop sync: jumps" << delta << "beats, so its drop at beat"
-                       << drop << "meets" << refGroup << "'s at beat" << *refDrop;
+        kLogger.info() << m_group << "cue sync: jumps" << delta << "beats, so its cue at beat"
+                       << cue << "meets" << refGroup << "'s at beat" << *refCue;
         if (delta != 0) {
             set(m_group, "beatjump", delta);
         }
         return;
     }
-    kLogger.info() << m_group << "drop sync: no drop on this deck fits";
+    kLogger.info() << m_group << "cue sync: no hot cue on this deck fits";
 }
 
 void BarControl::armPlayOnPhrase(bool arm) {
@@ -410,7 +412,8 @@ void BarControl::armPlayOnPhrase(bool arm) {
 std::optional<int> BarControl::cueBeat(
         const TrackPointer& pTrack, const DeckPosition& pos, int hotcue, int fromBeat) {
     if (hotcue <= 0) {
-        for (int beat : dropBeats(pTrack, pos)) {
+        const QString label = hotcue == kNextCue ? QString() : QStringLiteral("Drop");
+        for (int beat : cueBeats(pTrack, pos, label)) {
             if (beat >= fromBeat) {
                 return beat;
             }
@@ -430,19 +433,20 @@ std::optional<int> BarControl::cueBeat(
 }
 
 // static
-QList<int> BarControl::dropBeats(const TrackPointer& pTrack, const DeckPosition& pos) {
+QList<int> BarControl::cueBeats(
+        const TrackPointer& pTrack, const DeckPosition& pos, const QString& label) {
     QList<int> beats;
     if (pTrack) {
         for (const auto& pCue : pTrack->getCuePoints()) {
             if (pCue->getType() == mixxx::CueType::HotCue && pCue->getPosition().isValid() &&
-                    pCue->getLabel().startsWith(QStringLiteral("DROP"), Qt::CaseInsensitive)) {
+                    pCue->getLabel().startsWith(label, Qt::CaseInsensitive)) {
                 beats.append(closestBeat(pos, pCue->getPosition()));
             }
         }
     }
     if (beats.isEmpty()) {
         for (const auto& section : pos.pAlignment->sections) {
-            if (section.label.startsWith(QStringLiteral("Drop"), Qt::CaseInsensitive)) {
+            if (section.label.startsWith(label, Qt::CaseInsensitive)) {
                 beats.append(section.startBeat);
             }
         }
@@ -493,7 +497,11 @@ void BarControl::armCueSyncWith(int mineHotcue, int theirsHotcue, int deck) {
     const DeckPosition& ref = refDeck->second;
     const auto& a = *own->pAlignment;
     const auto& r = *ref.pAlignment;
-    const auto mine = cueBeat(m_pTrack, *own, mineHotcue, std::numeric_limits<int>::min());
+    // "Next" on this deck: from where it is cued (a cue right there counts)
+    const int mineFrom = mineHotcue == kNextCue
+            ? own->beat + (own->fraction > 0.5 ? 1 : 0)
+            : std::numeric_limits<int>::min();
+    const auto mine = cueBeat(m_pTrack, *own, mineHotcue, mineFrom);
     // Far enough ahead to cue up and start: at least a bar
     const auto theirs = cueBeat(PlayerInfo::instance().getTrackInfo(refGroup),
             ref,
