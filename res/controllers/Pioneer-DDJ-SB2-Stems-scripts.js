@@ -78,8 +78,9 @@ PioneerDDJSB2.stemsOnBar = true;
 //     of the current bar; on release the track carries on where it would
 //     have been (the pad of the beat that's playing is lit)
 //   SHIFT + BANK pads = 1 phrase sync, 2 start on the other deck's next phrase
-//     (blinks while waiting; press again to cancel), 3 back to the start of
-//     this phrase, 4 loop this phrase
+//     (blinks while waiting; press again to cancel), 3 CUE SYNC (see
+//     cueSyncButton: make one of my hot cues land on one of theirs, e.g.
+//     double drop or my drop on their breakdown), 4 loop this phrase
 // If false: the classic manual loop pads and SHIFT + BANK = sampler eject.
 PioneerDDJSB2.performancePads = true;
 
@@ -754,6 +755,9 @@ PioneerDDJSB2.headphoneShiftCueButton = function(channel, control, value, status
 
 PioneerDDJSB2.hotCueButtons = function(channel, control, value, status, group) {
     var hotCueIndex = (control >= 0x40 ? control - 0x40 + 5 : control + 1);
+    if (PioneerDDJSB2.cueSyncPick && PioneerDDJSB2.pickCueForSync(group, hotCueIndex, value)) {
+        return;
+    }
     engine.setValue(PioneerDDJSB2.deckSwitchTable[group], "hotcue_" + hotCueIndex + "_activate", value);
 };
 
@@ -1538,8 +1542,13 @@ PioneerDDJSB2.updateBankPadLeds = function(group) {
         // SHIFT + BANK: phrase sync / start on phrase (blinks while waiting) /
         // phrase restart / phrase loop
         const armed = engine.getValue(group, "play_on_phrase") > 0;
+        const cueSync = engine.getValue(group, "cue_sync") > 0 ||
+            (PioneerDDJSB2.cueSyncPick !== null && PioneerDDJSB2.cueSyncPick.group === group);
         for (let pad = 0; pad < 4; pad++) {
-            const on = pad === 1 && armed ? PioneerDDJSB2.blinkOn : loaded;
+            let on = loaded;
+            if ((pad === 1 && armed) || (pad === 2 && cueSync)) {
+                on = PioneerDDJSB2.blinkOn;
+            }
             PioneerDDJSB2.padLedCached(group, PioneerDDJSB2.ledGroups.sampler, true, pad, true, on);
         }
     }
@@ -1643,12 +1652,55 @@ PioneerDDJSB2.shiftBankPad = function(channel, control, value, status, group) {
         script.toggleControl(group, "play_on_phrase");
         break;
     case 2:
-        script.triggerControl(group, "phrase_restart");
+        PioneerDDJSB2.cueSyncButton(group);
         break;
     case 3:
         script.triggerControl(group, "phrase_loop");
         break;
     }
+    PioneerDDJSB2.updateBankPadLeds(group);
+};
+
+// CUE SYNC (SHIFT + BANK pad 3): make a cue of this deck land on a cue of the
+// playing deck. Press: pick mode (pad blinks). Then optionally a HOT CUE pad
+// on this deck (my cue; default: my first DROP), then a HOT CUE pad on the
+// other deck (their cue) - that arms it. Pressing pad 3 again instead arms
+// with both DROPs (double drop); pressing it while armed cancels.
+PioneerDDJSB2.cueSyncPick = null; // {group, mine}
+
+PioneerDDJSB2.cueSyncButton = function(group) {
+    if (engine.getValue(group, "cue_sync") > 0) {
+        engine.setValue(group, "cue_sync", 0); // armed: cancel
+        PioneerDDJSB2.cueSyncPick = null;
+    } else if (PioneerDDJSB2.cueSyncPick && PioneerDDJSB2.cueSyncPick.group === group) {
+        PioneerDDJSB2.armCueSync(group, PioneerDDJSB2.cueSyncPick.mine, 0, 0);
+    } else {
+        PioneerDDJSB2.cueSyncPick = {group: group, mine: 0};
+    }
+    PioneerDDJSB2.updateBankPadLeds(group);
+};
+
+// A HOT CUE pad while picking: returns true if it was used for the pick
+PioneerDDJSB2.pickCueForSync = function(group, hotCue, value) {
+    const pick = PioneerDDJSB2.cueSyncPick;
+    if (!value) {
+        return true; // releases of picking presses don't trigger cues either
+    }
+    if (group === pick.group) {
+        pick.mine = hotCue;
+        return true;
+    }
+    PioneerDDJSB2.armCueSync(pick.group, pick.mine, hotCue,
+        PioneerDDJSB2.channelGroups[group] + 1);
+    return true;
+};
+
+PioneerDDJSB2.armCueSync = function(group, mine, theirs, theirDeck) {
+    engine.setValue(group, "cue_sync_mine", mine);
+    engine.setValue(group, "cue_sync_theirs", theirs);
+    engine.setValue(group, "cue_sync_deck", theirDeck);
+    engine.setValue(group, "cue_sync", 1);
+    PioneerDDJSB2.cueSyncPick = null;
     PioneerDDJSB2.updateBankPadLeds(group);
 };
 
@@ -1668,7 +1720,8 @@ PioneerDDJSB2.blinkTick = function() {
         if (engine.getValue(group, "stem_mask_pending") >= 0) {
             PioneerDDJSB2.updateCueLoopPadLeds(group);
         }
-        if (engine.getValue(group, "play_on_phrase") > 0) {
+        if (engine.getValue(group, "play_on_phrase") > 0 || engine.getValue(group, "cue_sync") > 0 ||
+                (PioneerDDJSB2.cueSyncPick && PioneerDDJSB2.cueSyncPick.group === group)) {
             PioneerDDJSB2.updateBankPadLeds(group);
         }
     }
@@ -1714,7 +1767,7 @@ PioneerDDJSB2.initStemsAndPhrases = function(group) {
     if (PioneerDDJSB2.softStartSeconds !== null) {
         engine.setValue(group, "softstart_time", PioneerDDJSB2.softStartSeconds);
     }
-    ["structure_loaded", "beats_until_phrase", "beat_distance", "play_on_phrase"].forEach(function(key) {
+    ["structure_loaded", "beats_until_phrase", "beat_distance", "play_on_phrase", "cue_sync"].forEach(function(key) {
         const conn = engine.makeConnection(group, key, function() {
             PioneerDDJSB2.updateBankPadLeds(group);
         });

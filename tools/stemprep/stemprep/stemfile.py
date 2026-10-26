@@ -17,7 +17,7 @@ from typing import Dict, Optional
 
 import numpy as np
 
-from .audio import SAMPLE_RATE, find_ffmpeg
+from .audio import NO_WINDOW, SAMPLE_RATE, find_ffmpeg
 
 STEM_ORDER = ("drums", "bass", "other", "vocals")
 STEM_NAMES = {"drums": "Drums", "bass": "Bass", "other": "Melody", "vocals": "Vocals"}
@@ -84,7 +84,8 @@ def write_stem_file(
         for i, name in enumerate(["Mix"] + [STEM_NAMES[s] for s in STEM_ORDER]):
             cmd += [f"-metadata:s:a:{i}", f"handler_name={name}"]
         cmd += ["-f", "mp4", str(tmp_out)]
-        proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                              creationflags=NO_WINDOW)
         if proc.returncode != 0:
             raise RuntimeError("ffmpeg failed writing stem file:\n" +
                                proc.stderr.decode(errors="replace"))
@@ -101,7 +102,7 @@ def _encode_aac(ffmpeg: str, x: np.ndarray, out: Path, sample_rate: int, bitrate
     # stderr goes to a file: a full pipe could block ffmpeg while we write
     with tempfile.TemporaryFile() as err:
         proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
-                                stderr=err)
+                                stderr=err, creationflags=NO_WINDOW)
         try:
             chunk = sample_rate * 10
             for s in range(0, x.shape[1], chunk):

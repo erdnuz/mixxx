@@ -219,14 +219,40 @@ test("pending stem change blinks", () => {
     set(D1, "stem_mask_pending", -1);
 });
 
-test("SHIFT + BANK pads: phrase sync, start on phrase, restart, phrase loop", () => {
+test("SHIFT + BANK pads: phrase sync, start on phrase, (cue sync), phrase loop", () => {
     for (let pad = 0; pad < 4; pad++) {
         S.shiftBankPad(0, 0x78 + pad, 0x7F, 0x97, D1);
     }
     assert.deepStrictEqual(sets(D1, "phrase_sync").slice(0, 1), [1]);
     assert.deepStrictEqual(sets(D1, "play_on_phrase"), [1]);
-    assert.deepStrictEqual(sets(D1, "phrase_restart").slice(0, 1), [1]);
     assert.deepStrictEqual(sets(D1, "phrase_loop").slice(0, 1), [1]);
+    S.cueSyncPick = null; // pad 3 started picking for cue sync
+});
+
+test("cue sync: pick my cue, then theirs on the other deck, arms; pads don't jump", () => {
+    S.shiftBankPad(0, 0x7A, 0x7F, 0x97, D1); // SHIFT + BANK 3: pick mode
+    S.hotCueButtons(0, 0x01, 0x7F, 0x97, D1); // my hot cue 2
+    S.hotCueButtons(0, 0x01, 0x00, 0x97, D1);
+    S.hotCueButtons(0, 0x02, 0x7F, 0x98, "[Channel2]"); // their hot cue 3
+    assert.deepStrictEqual(sets(D1, "cue_sync_mine"), [2]);
+    assert.deepStrictEqual(sets(D1, "cue_sync_theirs"), [3]);
+    assert.deepStrictEqual(sets(D1, "cue_sync_deck"), [2]);
+    assert.deepStrictEqual(sets(D1, "cue_sync"), [1]);
+    assert.deepStrictEqual(log.filter((e) => e[0] === "set" && /hotcue_\d_activate/.test(e[2])), []);
+    S.hotCueButtons(0, 0x00, 0x7F, 0x97, D1); // picking is over: cues work again
+    assert.deepStrictEqual(sets(D1, "hotcue_1_activate"), [0x7F]);
+    S.shiftBankPad(0, 0x7A, 0x7F, 0x97, D1); // armed: pad 3 cancels
+    assert.deepStrictEqual(sets(D1, "cue_sync"), [1, 0]);
+});
+
+test("cue sync: pad 3 twice = double drop with both DROP cues", () => {
+    S.shiftBankPad(0, 0x7A, 0x7F, 0x97, D1);
+    S.shiftBankPad(0, 0x7A, 0x7F, 0x97, D1);
+    assert.deepStrictEqual(sets(D1, "cue_sync_mine"), [0]);
+    assert.deepStrictEqual(sets(D1, "cue_sync_theirs"), [0]);
+    assert.deepStrictEqual(sets(D1, "cue_sync_deck"), [0]);
+    assert.deepStrictEqual(sets(D1, "cue_sync"), [1]);
+    set(D1, "cue_sync", 0);
 });
 
 test("BANK LEDs count down the last 4 bars", () => {

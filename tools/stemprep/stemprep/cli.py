@@ -3,6 +3,8 @@
 Examples
   stemprep add https://open.spotify.com/playlist/...   track a playlist and sync it
   stemprep add <link> --folder "130 fweak"             ... into a folder you already have
+  stemprep link                                        link your existing folders to their
+                                                       Spotify playlists (asks per folder)
   stemprep sync                                        new tracks of all tracked playlists
   stemprep list                                        tracked playlists
   stemprep remove "130 fweak"                          stop tracking (files are kept)
@@ -31,7 +33,7 @@ from . import __version__
 
 log = logging.getLogger("stemprep")
 
-COMMANDS = ("add", "sync", "list", "remove", "reanalyze", "hq", "worker")
+COMMANDS = ("add", "link", "sync", "list", "remove", "reanalyze", "hq", "worker")
 
 
 def default_root() -> Path:
@@ -93,6 +95,11 @@ def build_parser(command: str | None) -> argparse.ArgumentParser:
         elif command == "reanalyze":
             p.add_argument("paths", nargs="*", type=Path,
                            help="Stem files or folders (default: <root>/Stems)")
+        elif command == "link":
+            p.description = ("Link the folders you already have in <root>/Downloads to their "
+                             "Spotify playlists, so `stemprep sync` keeps them up to date. "
+                             "Asks for each folder that isn't linked yet.")
+            p.add_argument("--threads", type=int, default=4, help="Parallel spotDL downloads")
         elif command == "hq":
             p.description = ("High quality (Demucs) stems for every track that doesn't have "
                              "them yet. Several minutes per track: run it overnight. Stop "
@@ -137,7 +144,47 @@ def main(argv=None) -> int:
         return cmd_reanalyze(args)
     if command == "hq":
         return cmd_hq(args)
+    if command == "link":
+        return cmd_link(args)
     return cmd_process(args)
+
+
+def cmd_link(args) -> int:
+    from .download import is_spotify_url
+    from .playlists import PlaylistStore
+
+    store = PlaylistStore(args.root)
+    linked = {p["folder"].lower() for p in store.playlists}
+    downloads = args.root / "Downloads"
+    folders = sorted(p.name for p in downloads.iterdir()
+                     if p.is_dir() and not p.name.startswith(".")
+                     and p.name.lower() not in linked) if downloads.is_dir() else []
+    if not folders:
+        print("All folders in", downloads, "are linked already (see `stemprep list`).")
+        return 0
+    print("Paste the Spotify playlist link for each folder (right-click pastes),")
+    print("or just press Enter to skip it.\n")
+    added = []
+    for folder in folders:
+        while True:
+            url = input(f"{folder}: ").strip().strip('"')
+            if not url or is_spotify_url(url):
+                break
+            print("  That isn't a Spotify link (https://open.spotify.com/playlist/...). Try again.")
+        if url:
+            store.add(url, folder)
+            added.append(folder)
+    store.save()
+    if not added:
+        return 0
+    # Only download what's new and write the Spotify-order playlist files:
+    # stems for hundreds of tracks would take hours (Mixxx asks for them when
+    # a track is loaded; `stemprep hq` does them all overnight).
+    print(f"\nLinked {len(added)} folder(s). Getting new tracks...\n")
+    sync_args = build_parser("sync").parse_args(added + ["--download-only",
+                                                         "--threads", str(args.threads),
+                                                         "--root", str(args.root)])
+    return cmd_sync(sync_args, "sync")
 
 
 def cmd_process(args) -> int:

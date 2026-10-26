@@ -13,6 +13,10 @@ import numpy as np
 
 SAMPLE_RATE = 44100
 
+# Pass to subprocess calls: on Windows, without it every ffmpeg started from
+# the background worker (pythonw, no console) opens its own console window.
+NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
 AUDIO_EXTENSIONS = {".mp3", ".m4a", ".aac", ".flac", ".wav", ".aiff", ".aif", ".ogg",
                     ".opus", ".wma", ".alac", ".mp4"}
 
@@ -50,7 +54,8 @@ def decode(path: Path, sample_rate: int = SAMPLE_RATE, channels: int = 2,
     if max_seconds:
         cmd += ["-t", str(max_seconds)]
     cmd += ["-"]
-    proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                          creationflags=NO_WINDOW)
     if proc.returncode != 0:
         raise RuntimeError(f"ffmpeg could not decode {path}: {proc.stderr.decode(errors='replace')}")
     data = np.frombuffer(proc.stdout, dtype=np.float32)
@@ -62,7 +67,8 @@ def probe_tags(path: Path) -> dict:
     if not probe:
         return {}
     proc = subprocess.run([probe, "-v", "error", "-print_format", "json", "-show_format",
-                           str(path)], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                           str(path)], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                          creationflags=NO_WINDOW)
     if proc.returncode != 0:
         return {}
     try:

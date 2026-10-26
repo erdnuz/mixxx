@@ -12,6 +12,7 @@
 #include "util/parented_ptr.h"
 #include "util/thread_affinity.h"
 
+class FolderPlaylists;
 class LibraryScanner;
 class TrackCollection;
 class ExternalTrackCollection;
@@ -135,4 +136,6 @@ class TrackCollectionManager: public QObject,
 
     // TODO: Extract and decouple LibraryScanner from TrackCollectionManager
     std::unique_ptr<LibraryScanner> m_pScanner;
+    // A playlist per library folder, refreshed after each scan
+    parented_ptr<FolderPlaylists> m_pFolderPlaylists;
 };

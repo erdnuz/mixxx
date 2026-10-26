@@ -118,6 +118,18 @@ file (and next to the source file).
   firing. Math helpers on `TrackStructure::Alignment` (`beatInBar`,
   `phraseStartAtOrBefore`, `positionInPhrase`, `nextPhraseStart`, `syncDelta`,
   `phraseBeats`) are unit tested.
+  Cue sync: `cue_sync_mine`/`cue_sync_theirs` (hot cue numbers, 0 = DROP
+  label), `cue_sync_deck`, `cue_sync_lead_bars` (8), `cue_sync` (arm):
+  enables sync, seeks to mine − lead (whole bars, clipped to track start and
+  time left), starts when the other deck reaches theirs − lead (shared
+  `startPlayAt`/`firePlayStart` with play_on_phrase). SB2: SHIFT+BANK pad 3
+  pick mode intercepts HOT CUE pads (`cueSyncPick`).
+- `src/library/folderplaylists.{h,cpp}` (owned by TrackCollectionManager):
+  after each scan (and 5 s after start) one locked playlist per folder
+  directly inside each library root, order from `<folder>/<folder>.m3u8`
+  (stemprep sync writes it in Spotify order) then file name;
+  `[Library] FolderPlaylists` 0 = off. `stemprep link` asks a Spotify URL
+  per unlinked Downloads folder (then `sync --download-only`).
 - `src/mixer/brakecontrol.{h,cpp}` (owned by BaseTrackPlayerImpl): `brake`
   (press: brake playing deck / spin up stopped or braking deck),
   `brake_active`, `brake_time` (2 s), `softstart_time` (0.8 s), persisted.

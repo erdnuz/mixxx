@@ -24,9 +24,10 @@ echo  4  Stop syncing a playlist (files are kept)
 echo  5  Process one link, folder or file
 echo  6  Redo bars/phrases/drops after a Stemprep update (fast)
 echo  7  High quality stems for all my tracks (slow: leave it running overnight)
+echo  8  Link my existing folders to their Spotify playlists
 echo.
 set "CHOICE="
-set /p "CHOICE=Choose 1-7 and press Enter: "
+set /p "CHOICE=Choose 1-8 and press Enter: "
 
 if "%CHOICE%"=="1" (
   "%STEMPREP%" sync
@@ -67,6 +68,10 @@ if "%CHOICE%"=="7" (
   echo  next time it continues where it stopped. Mixxx uses the new stems
   echo  the next time a track is loaded.
   "%STEMPREP%" hq
+  goto done
+)
+if "%CHOICE%"=="8" (
+  "%STEMPREP%" link
   goto done
 )
 exit /b 0

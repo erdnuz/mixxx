@@ -61,8 +61,28 @@ Pads (mode buttons on the controller)
 * BANK (SHIFT + SAMPLER): previous / next section, previous / next phrase
   (in phase). In the last 4 bars before a phrase the pads count down.
   SHIFT + pad: 1 phrase sync, 2 start on the other deck's next phrase
-  (blinks while waiting, again = cancel), 3 back to this phrase's start,
-  4 loop this phrase.
+  (blinks while waiting, again = cancel), 3 CUE SYNC (below), 4 loop this
+  phrase.
+
+CUE SYNC: make one of your hot cues land exactly on one of theirs
+* On the stopped deck press SHIFT + BANK pad 3 (it blinks).
+* Optional: press a HOT CUE pad on your deck = your cue (default: your DROP).
+* Press a HOT CUE pad on the playing deck = their cue. It's armed: your deck
+  syncs, cues up 8 bars before your cue and starts by itself so both cues
+  hit together. Examples: their DROP + your DROP = double drop; their
+  BREAKDOWN or OUTRO + your DROP = handover.
+* Pad 3 twice = both DROPs (quick double drop). Pad 3 while armed = cancel.
+  The hot cue pads don't jump while you pick.
+
+Library playlists
+* Every folder in a library folder becomes a playlist with its name (e.g.
+  "130 fweak"), refreshed after each library rescan, in Spotify order when
+  the folder is linked to a Spotify playlist. They are locked because they
+  are rewritten; make your own playlists for anything else.
+  Off: [Library] FolderPlaylists 0 in mixxx.cfg.
+* Link your folders to Spotify: Stemprep on the Desktop, option 8. After
+  that, option 1 (sync) downloads new tracks into those folders; rescan the
+  library in Mixxx to update the playlists.
 
 Effects
 * FX buttons: tap = select effect, hold = on/off (as before).

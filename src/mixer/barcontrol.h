@@ -35,6 +35,22 @@ class ControlPushButton;
 ///   [ChannelN],phrase_restart     jump back to the start of the current
 ///                                 phrase, keeping the place in the bar
 ///
+/// Cue sync: make a cue of this (stopped) deck land exactly on a cue of the
+/// playing deck: double drops (their DROP + my DROP), handovers (their
+/// BREAKDOWN or OUTRO + my DROP), anything else.
+///   [ChannelN],cue_sync_mine      hot cue number (1..) on this deck; 0 = its
+///                                 first cue labelled DROP
+///   [ChannelN],cue_sync_theirs    hot cue number on the other deck; 0 = its
+///                                 next cue labelled DROP
+///   [ChannelN],cue_sync_deck      the other deck (1..4); 0 = the reference
+///                                 deck (see below)
+///   [ChannelN],cue_sync_lead_bars bars of this deck played before its cue
+///                                 (default 8; fewer if the track is shorter)
+///   [ChannelN],cue_sync           1 = arm: enables sync, cues this deck the
+///                                 lead before its cue and starts it so the
+///                                 two cues meet; 0 again once started; set 0
+///                                 to cancel
+///
 /// The reference deck is the sync leader if it is another playing deck with
 /// structure, else another playing deck with structure.
 ///
@@ -70,7 +86,17 @@ class BarControl : public QObject {
     void updateStatus();
     void phraseSync();
     void armPlayOnPhrase(bool arm);
-    void firePlayOnPhrase();
+    void armCueSync(bool arm);
+    /// Start this deck when `referenceGroup` reaches grid beat `targetBeat`.
+    /// followPhrases: if the reference jumps past it, wait for its next
+    /// phrase (play_on_phrase); otherwise give up (cue_sync).
+    void startPlayAt(const QString& referenceGroup, int targetBeat, bool followPhrases);
+    void cancelPlayStart();
+    void firePlayStart();
+    /// Grid beat of a hot cue (1-based number; 0 = first DROP cue at or after
+    /// fromBeat), or nothing.
+    static std::optional<int> cueBeat(
+            const TrackPointer& pTrack, const DeckPosition& pos, int hotcue, int fromBeat);
     void requestStemMask(int mask);
     void applyStemMask();
     void loopBeats(int startBeat, int lengthBeats);
@@ -89,6 +115,11 @@ class BarControl : public QObject {
     std::unique_ptr<ControlObject> m_pBarLoop;
     std::unique_ptr<ControlPushButton> m_pPhraseLoop;
     std::unique_ptr<ControlPushButton> m_pPhraseRestart;
+    std::unique_ptr<ControlObject> m_pCueSyncMine;
+    std::unique_ptr<ControlObject> m_pCueSyncTheirs;
+    std::unique_ptr<ControlObject> m_pCueSyncDeck;
+    std::unique_ptr<ControlObject> m_pCueSyncLeadBars;
+    std::unique_ptr<ControlObject> m_pCueSync;
 
     QTimer m_positionTimer;
     QTimer m_stemTimer;
@@ -96,4 +127,5 @@ class BarControl : public QObject {
     QTimer m_playTimer;
     QString m_playReferenceGroup;
     int m_playReferenceTarget = 0;
+    bool m_playFollowsPhrases = false;
 };

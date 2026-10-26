@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 
 #include "control/controlobject.h"
 #include "control/controlpushbutton.h"
@@ -115,12 +116,28 @@ BarControl::BarControl(const QString& group, QObject* pParent)
         }
     });
 
+    // Cue sync settings keep their values (they're choices, not requests)
+    const auto setting = [&group](const char* item, double initial) {
+        auto pControl = std::make_unique<ControlObject>(
+                ConfigKey(group, QString::fromLatin1(item)));
+        pControl->set(initial);
+        return pControl;
+    };
+    m_pCueSyncMine = setting("cue_sync_mine", 0);
+    m_pCueSyncTheirs = setting("cue_sync_theirs", 0);
+    m_pCueSyncDeck = setting("cue_sync_deck", 0);
+    m_pCueSyncLeadBars = setting("cue_sync_lead_bars", 8);
+    m_pCueSync = std::make_unique<ControlObject>(ConfigKey(group, QStringLiteral("cue_sync")));
+    connect(m_pCueSync.get(), &ControlObject::valueChanged, this, [this](double v) {
+        armCueSync(v > 0);
+    });
+
     for (QTimer* pTimer : {&m_stemTimer, &m_playTimer}) {
         pTimer->setSingleShot(true);
         pTimer->setTimerType(Qt::PreciseTimer);
     }
     connect(&m_stemTimer, &QTimer::timeout, this, &BarControl::stemMaskTimerFired);
-    connect(&m_playTimer, &QTimer::timeout, this, &BarControl::firePlayOnPhrase);
+    connect(&m_playTimer, &QTimer::timeout, this, &BarControl::firePlayStart);
     m_positionTimer.setInterval(kStatusIntervalMs);
     connect(&m_positionTimer, &QTimer::timeout, this, &BarControl::updateStatus);
 }
@@ -131,8 +148,7 @@ void BarControl::trackLoaded(TrackPointer pTrack) {
     m_pTrack = std::move(pTrack);
     m_stemTimer.stop();
     m_pStemMaskPending->forceSet(-1);
-    armPlayOnPhrase(false);
-    m_pPlayOnPhrase->forceSet(0);
+    cancelPlayStart();
     if (m_pTrack) {
         m_positionTimer.start();
     } else {
@@ -265,41 +281,162 @@ void BarControl::phraseSync() {
 }
 
 void BarControl::armPlayOnPhrase(bool arm) {
-    m_playTimer.stop();
-    m_playReferenceGroup.clear();
     if (!arm) {
+        cancelPlayStart();
         return;
     }
     const auto own = ownPosition();
     const auto refDeck = referenceDeck();
     if (!own || own->playing || !refDeck) {
-        m_pPlayOnPhrase->forceSet(0);
+        cancelPlayStart();
         return;
     }
+    m_pCueSync->forceSet(0); // one or the other
     const DeckPosition& ref = refDeck->second;
     int target = ref.pAlignment->nextPhraseStart(ref.beat);
     if (msUntilBeat(ref, target) < kMinLeadMs) {
         target = ref.pAlignment->nextPhraseStart(target);
     }
-    m_playReferenceGroup = refDeck->first;
-    m_playReferenceTarget = target;
-    m_playTimer.start(static_cast<int>(std::max(0.0, msUntilBeat(ref, target))));
+    startPlayAt(refDeck->first, target, true);
 }
 
-void BarControl::firePlayOnPhrase() {
+// static
+std::optional<int> BarControl::cueBeat(
+        const TrackPointer& pTrack, const DeckPosition& pos, int hotcue, int fromBeat) {
+    if (!pTrack) {
+        return std::nullopt;
+    }
+    std::optional<int> best;
+    for (const auto& pCue : pTrack->getCuePoints()) {
+        if (pCue->getType() != mixxx::CueType::HotCue || !pCue->getPosition().isValid()) {
+            continue;
+        }
+        const auto position = pCue->getPosition();
+        // Closest grid beat
+        int beat = mixxx::TrackStructure::beatIndexAtOrBefore(*pos.pBeats, position);
+        const auto next = mixxx::TrackStructure::beatPosition(*pos.pBeats, beat + 1);
+        if (next - position < position - mixxx::TrackStructure::beatPosition(*pos.pBeats, beat)) {
+            beat++;
+        }
+        if (hotcue > 0) {
+            if (pCue->getHotCue() == hotcue - 1) {
+                return beat;
+            }
+        } else if (pCue->getLabel().startsWith(QStringLiteral("DROP"), Qt::CaseInsensitive) &&
+                beat >= fromBeat && (!best || beat < *best)) {
+            best = beat;
+        }
+    }
+    return best;
+}
+
+void BarControl::armCueSync(bool arm) {
+    if (!arm) {
+        cancelPlayStart();
+        return;
+    }
+    const auto own = ownPosition();
+    std::optional<std::pair<QString, DeckPosition>> refDeck;
+    const int deck = static_cast<int>(m_pCueSyncDeck->get());
+    if (deck > 0) {
+        const QString group = PlayerManager::groupForDeck(deck - 1);
+        auto pos = positionOf(group, PlayerInfo::instance().getTrackInfo(group));
+        if (group != m_group && pos && pos->playing) {
+            refDeck = std::make_pair(group, std::move(*pos));
+        }
+    } else {
+        refDeck = referenceDeck();
+    }
+    if (!own || own->playing || !refDeck) {
+        kLogger.info() << m_group << "cue sync: needs this deck stopped and the other playing,"
+                       << "both with bars/phrases";
+        cancelPlayStart();
+        return;
+    }
+    const QString& refGroup = refDeck->first;
+    const DeckPosition& ref = refDeck->second;
+    const auto& a = *own->pAlignment;
+    const auto& r = *ref.pAlignment;
+    const auto mine = cueBeat(m_pTrack,
+            *own,
+            static_cast<int>(m_pCueSyncMine->get()),
+            std::numeric_limits<int>::min());
+    // Far enough ahead to cue up and start: at least a bar
+    const auto theirs = cueBeat(PlayerInfo::instance().getTrackInfo(refGroup),
+            ref,
+            static_cast<int>(m_pCueSyncTheirs->get()),
+            ref.beat + r.beatsPerBar);
+    if (!mine || !theirs || *theirs <= ref.beat) {
+        kLogger.info() << m_group << "cue sync: cue not found, or the other deck is past it";
+        cancelPlayStart();
+        return;
+    }
+    // Lead-in on this deck in whole bars: as asked, but not before the
+    // track's first beat and not more than the time left on the other deck.
+    // Both decks run at the same tempo (sync), so beats count the same,
+    // scaled if one grid is at double tempo.
+    const double ratio = static_cast<double>(r.beatsPerBar) / a.beatsPerBar;
+    const int firstBeat = mixxx::TrackStructure::beatIndexAtOrBefore(
+            *own->pBeats, mixxx::audio::FramePos(0));
+    const int leadBars = std::max(0, static_cast<int>(m_pCueSyncLeadBars->get()));
+    int lead = leadBars * a.beatsPerBar;
+    lead = std::min(lead, std::max(0, *mine - firstBeat));
+    const int theirLeft = *theirs - ref.beat - 1; // keep a beat to get going
+    lead = std::min(lead, static_cast<int>(std::floor(theirLeft / ratio)));
+    lead -= lead % a.beatsPerBar; // whole bars, so downbeats meet on the way
+    if (lead < 0) {
+        cancelPlayStart();
+        return;
+    }
+    // Same tempo, then cue up the lead-in
+    set(m_group, "sync_enabled", 1);
+    const double trackSamples = get(m_group, "track_samples");
+    if (trackSamples > 0) {
+        const auto startPosition =
+                mixxx::TrackStructure::beatPosition(*own->pBeats, *mine - lead);
+        set(m_group, "playposition", startPosition.toEngineSamplePos() / trackSamples);
+    }
+    m_pPlayOnPhrase->forceSet(0); // one or the other
+    const int target = *theirs - static_cast<int>(std::lround(lead * ratio));
+    kLogger.info() << m_group << "cue sync: starts" << lead << "beats before its cue, when"
+                   << refGroup << "reaches beat" << target;
+    startPlayAt(refGroup, target, false);
+}
+
+void BarControl::startPlayAt(const QString& referenceGroup, int targetBeat, bool followPhrases) {
+    m_playReferenceGroup = referenceGroup;
+    m_playReferenceTarget = targetBeat;
+    m_playFollowsPhrases = followPhrases;
+    firePlayStart(); // starts the timer (or plays right away if it's time)
+}
+
+void BarControl::cancelPlayStart() {
+    m_playTimer.stop();
+    m_playReferenceGroup.clear();
+    m_pPlayOnPhrase->forceSet(0);
+    m_pCueSync->forceSet(0);
+}
+
+void BarControl::firePlayStart() {
     if (m_playReferenceGroup.isEmpty()) {
         return;
     }
     const auto ref = positionOf(
             m_playReferenceGroup, PlayerInfo::instance().getTrackInfo(m_playReferenceGroup));
-    if (!ref || !ref->playing) {
-        // The reference stopped: give up
-        armPlayOnPhrase(false);
-        m_pPlayOnPhrase->forceSet(0);
+    if (!ref || !ref->playing || (get(m_group, "play") > 0)) {
+        // The other deck stopped, or this one was started by hand
+        cancelPlayStart();
         return;
     }
     if (ref->beat > m_playReferenceTarget) {
-        // It jumped past the phrase (loop, hot cue): wait for the next one
+        if (!m_playFollowsPhrases) {
+            // It jumped past the cue (loop, hot cue): the moment is gone
+            kLogger.info() << m_group << "cue sync cancelled:" << m_playReferenceGroup
+                           << "moved past the cue";
+            cancelPlayStart();
+            return;
+        }
+        // Wait for its next phrase instead
         m_playReferenceTarget = ref->pAlignment->nextPhraseStart(ref->beat);
     }
     const double remaining = msUntilBeat(*ref, m_playReferenceTarget);
@@ -307,10 +444,11 @@ void BarControl::firePlayOnPhrase() {
         m_playTimer.start(static_cast<int>(remaining));
         return;
     }
-    kLogger.info() << m_group << "starts on the phrase of" << m_playReferenceGroup;
+    kLogger.info() << m_group << "starts with" << m_playReferenceGroup;
     set(m_group, "play", 1);
     m_playReferenceGroup.clear();
     m_pPlayOnPhrase->forceSet(0);
+    m_pCueSync->forceSet(0);
 }
 
 void BarControl::requestStemMask(int mask) {

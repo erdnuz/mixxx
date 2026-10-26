@@ -1,8 +1,10 @@
 #include "library/trackcollectionmanager.h"
 
+#include <QTimer>
 #include <utility>
 
 #include "library/externaltrackcollection.h"
+#include "library/folderplaylists.h"
 #include "library/library_decl.h"
 #include "library/library_prefs.h"
 #include "library/scanner/libraryscanner.h"
@@ -88,6 +90,17 @@ TrackCollectionManager::TrackCollectionManager(
                 this,
                 &TrackCollectionManager::libraryScanSummary,
                 /*signal-to-signal*/ Qt::DirectConnection);
+
+        // Playlists per folder, updated in this (the GUI) thread after a scan
+        m_pFolderPlaylists = make_parented<FolderPlaylists>(
+                m_pInternalCollection.get(), pConfig, this);
+        connect(m_pScanner.get(),
+                &LibraryScanner::scanFinished,
+                m_pFolderPlaylists.get(),
+                &FolderPlaylists::sync,
+                Qt::QueuedConnection);
+        // Also for a library that was scanned before this existed
+        QTimer::singleShot(5000, m_pFolderPlaylists.get(), &FolderPlaylists::sync);
 
         // Handle signals
         // NOTE: The receiver's thread context `this` is required to enforce
