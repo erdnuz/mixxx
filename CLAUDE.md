@@ -174,6 +174,9 @@ New files `res/controllers/Pioneer-DDJ-SB2-Stems.midi.xml` +
   beatjump to beat N, LED = current beat); `performancePads` off = classic.
 - BANK pads: section/phrase jumps, LEDs count down the last 4 bars; SHIFT+BANK
   (0x78) = phrase_sync / play_on_phrase / phrase_restart / phrase_loop.
+- SHIFT+VINYL (0x4E) = slip mode toggle (`slipReturns`, LED 0x4E): jog touch
+  (vinyl mode) and bar loops set `slip_enabled` 1 on start and 0 on jog
+  release / `loop_enabled` 0, so each returns by itself.
 - SHIFT+TEMPO (0x05/0x25) = key in semitones (`keyFader`, own pick-up,
   follows `rate_dir`); SHIFT+KEYLOCK glides `rate` to 0 + `pitch_adjust` 0.
 - SHIFT+FX buttons (0x63–0x65) = `beats_halve` / `beats_reset` /

@@ -265,6 +265,31 @@ test("BANK LEDs count down the last 4 bars", () => {
     S.updateBankPadLeds(D1);
 });
 
+test("SLIP MODE: scratch and bar loops return when they end", () => {
+    S.vinylButton(0, 0x4D, 0x7F, 0x90, D1); // scratch mode on (jog = vinyl)
+    S.slipButton(0, 0x4E, 0x7F, 0x90, D1); // SHIFT + VINYL: slip mode on
+    S.slipButton(0, 0x4E, 0x00, 0x90, D1); // release: still on
+    assert.deepStrictEqual(sets(D1, "slip_enabled"), []);
+    assert.deepStrictEqual(leds(0x90, 0x4E).slice(-1), [0x7F]);
+    S.jogTouch(0, 0x36, 0x7F, 0x90, D1);
+    S.jogTouch(0, 0x36, 0x00, 0x90, D1);
+    assert.deepStrictEqual(sets(D1, "slip_enabled"), [1, 0]);
+
+    set(D1, "structure_loaded", 1);
+    set(D1, "beat_in_bar", 1);
+    S.manualLoopPad(0, 0x20, 0x7F, 0x97, D1); // 1-bar loop
+    S.manualLoopPad(0, 0x20, 0x00, 0x97, D1);
+    assert.deepStrictEqual(sets(D1, "slip_enabled"), [1, 0, 1]);
+    global.engine.setValue(D1, "loop_enabled", 1);
+    global.engine.setValue(D1, "loop_enabled", 0); // loop ends: back on track
+    assert.deepStrictEqual(sets(D1, "slip_enabled"), [1, 0, 1, 0]);
+
+    S.slipButton(0, 0x4E, 0x7F, 0x90, D1); // slip mode off
+    S.vinylButton(0, 0x4D, 0x7F, 0x90, D1); // scratch mode off
+    S.jogTouch(0, 0x36, 0x7F, 0x90, D1);
+    assert.deepStrictEqual(sets(D1, "slip_enabled").slice(-1), [0]);
+});
+
 test("SYNC tap = next sync step; hold = sync lock on/off", () => {
     const sync = S.deck[1].syncButton;
     sync.input(0, 0x58, 0x7F, 0x90, D1);

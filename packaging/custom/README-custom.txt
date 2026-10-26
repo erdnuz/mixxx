@@ -53,6 +53,10 @@ Transport
 * SHIFT + PLAY: brake to a stop, again = spin back up (PLAY blinks meanwhile).
 * SHIFT + TEMPO slider: key, in semitones (takes over at the current key).
 * SHIFT + KEYLOCK: glide tempo back to 0 and reset the key.
+* SHIFT + VINYL = SLIP MODE on/off (lit when on). While on, a scratch (VINYL
+  on, jog touched) or a bar loop plays over the track, and as soon as you let
+  go of the jog wheel / the loop ends, the track carries on where it would
+  have been, on the beat.
 
 Pads (mode buttons on the controller)
 * HOT CUE, AUTO LOOP, ROLL, SAMPLER: as before.

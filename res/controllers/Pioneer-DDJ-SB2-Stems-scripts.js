@@ -15,6 +15,12 @@ PioneerDDJSB2.invertVinylSlipButton = false;
 // the beginning of the track and stops playback.
 PioneerDDJSB2.reverseRollOnShiftCue = false;
 
+// If true, SHIFT + VINYL switches SLIP MODE on/off (lit when on): while on,
+// scratching and bar loops go back to where the track would have been as
+// soon as you let go of the jog wheel / the loop ends. If false, SHIFT +
+// VINYL is slip while held (original mapping).
+PioneerDDJSB2.slipReturns = true;
+
 // Sets the jogwheels sensitivity. 1 is default, 2 is twice as sensitive, 0.5 is half as sensitive.
 PioneerDDJSB2.jogwheelSensitivity = 1.0;
 
@@ -190,6 +196,7 @@ PioneerDDJSB2.init = function(_id) {
     PioneerDDJSB2.chFaderStart = [null, null, null, null];
 
     PioneerDDJSB2.scratchMode = [false, false, false, false];
+    PioneerDDJSB2.slipModeOn = [false, false, false, false];
 
     PioneerDDJSB2.ledGroups = {
         "hotCue": 0x00,
@@ -796,8 +803,31 @@ PioneerDDJSB2.vinylButton = function(channel, control, value, status, group) {
 PioneerDDJSB2.slipButton = function(channel, control, value, status, group) {
     if (PioneerDDJSB2.invertVinylSlipButton) {
         PioneerDDJSB2.toggleScratch(channel, control, value, status, group);
-    } else {
+    } else if (!PioneerDDJSB2.slipReturns) {
         engine.setValue(group, "slip_enabled", value / 127);
+    } else if (value) {
+        // SLIP MODE on/off (lit when on): scratches and bar loops return to
+        // where the track would have been as soon as they end
+        const deck = PioneerDDJSB2.channelGroups[group];
+        PioneerDDJSB2.slipModeOn[deck] = !PioneerDDJSB2.slipModeOn[deck];
+        PioneerDDJSB2.nonPadLedControl(
+            deck, PioneerDDJSB2.nonPadLeds.shiftVinyl, PioneerDDJSB2.slipModeOn[deck]);
+        if (!PioneerDDJSB2.slipModeOn[deck]) {
+            engine.setValue(group, "slip_enabled", 0);
+        }
+    }
+};
+
+// SLIP MODE: slip while something is going on (jog touched, bar loop)
+PioneerDDJSB2.slipStart = function(group) {
+    if (PioneerDDJSB2.slipModeOn[PioneerDDJSB2.channelGroups[group]]) {
+        engine.setValue(group, "slip_enabled", 1);
+    }
+};
+
+PioneerDDJSB2.slipEnd = function(group) {
+    if (PioneerDDJSB2.slipModeOn[PioneerDDJSB2.channelGroups[group]]) {
+        engine.setValue(group, "slip_enabled", 0); // jumps to the slip position
     }
 };
 
@@ -1151,6 +1181,7 @@ PioneerDDJSB2.jogTouch = function(channel, control, value, status, group) {
 
     if (PioneerDDJSB2.scratchMode[deck]) {
         if (value) {
+            PioneerDDJSB2.slipStart(PioneerDDJSB2.deckSwitchTable[group]);
             engine.scratchEnable(
                 deck + 1,
                 PioneerDDJSB2.scratchSettings.jogResolution,
@@ -1160,7 +1191,10 @@ PioneerDDJSB2.jogTouch = function(channel, control, value, status, group) {
                 true
             );
         } else {
-            engine.scratchDisable(deck + 1, true);
+            // In slip mode: back on the beat at once instead of a ramp
+            const slipping = PioneerDDJSB2.slipModeOn[deck];
+            engine.scratchDisable(deck + 1, !slipping);
+            PioneerDDJSB2.slipEnd(PioneerDDJSB2.deckSwitchTable[group]);
         }
     }
 };
@@ -1171,7 +1205,9 @@ PioneerDDJSB2.toggleScratch = function(channel, control, value, status, group) {
         PioneerDDJSB2.scratchMode[deck] = !PioneerDDJSB2.scratchMode[deck];
         if (!PioneerDDJSB2.invertVinylSlipButton) {
             PioneerDDJSB2.nonPadLedControl(deck, PioneerDDJSB2.nonPadLeds.vinyl, PioneerDDJSB2.scratchMode[deck]);
-            PioneerDDJSB2.nonPadLedControl(deck, PioneerDDJSB2.nonPadLeds.shiftVinyl, PioneerDDJSB2.scratchMode[deck]);
+            if (!PioneerDDJSB2.slipReturns) {
+                PioneerDDJSB2.nonPadLedControl(deck, PioneerDDJSB2.nonPadLeds.shiftVinyl, PioneerDDJSB2.scratchMode[deck]);
+            }
         }
         if (!PioneerDDJSB2.scratchMode[deck]) {
             engine.scratchDisable(deck + 1, true);
@@ -1627,6 +1663,9 @@ PioneerDDJSB2.manualLoopPad = function(channel, control, value, status, group) {
         // (the engine applies the change after this returns: decide from the old state)
         const ending = PioneerDDJSB2.activeBarLoop[group] === bars &&
             engine.getValue(group, "loop_enabled") > 0;
+        if (!ending && engine.getValue(group, "loop_enabled") === 0) {
+            PioneerDDJSB2.slipStart(group); // the loop's end returns (slipLoopEnded)
+        }
         if (hasStructure) {
             engine.setValue(group, "bar_loop", bars);
         } else {
@@ -1773,8 +1812,14 @@ PioneerDDJSB2.initStemsAndPhrases = function(group) {
         connections.push(stemPending);
     }
     ["beat_in_bar", "loop_enabled"].forEach(function(key) {
-        const conn = engine.makeConnection(group, key, function() {
+        const conn = engine.makeConnection(group, key, function(value) {
             PioneerDDJSB2.updateBarLoopLeds(group);
+            // SLIP MODE: a loop ended (any way): carry on where the track would be
+            if (key === "loop_enabled" && value === 0 &&
+                    engine.getValue(group, "slip_enabled") > 0 &&
+                    Object.keys(PioneerDDJSB2.slicerHeld[group] || {}).length === 0) {
+                PioneerDDJSB2.slipEnd(group);
+            }
         });
         if (conn) {
             connections.push(conn);
