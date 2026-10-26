@@ -1285,7 +1285,7 @@ PioneerDDJSB2.EffectUnit = function(unitNumber) {
         output: function(value, _group, _control) {
             this.send((value === this.buttonNumber) ? this.on : this.off);
         },
-        // The SHIFT LEDs show the routing instead (routeButton)
+        // The SHIFT LEDs belong to the beat buttons (beatButton)
         sendShifted: false,
     });
 
@@ -1298,16 +1298,27 @@ PioneerDDJSB2.EffectUnit = function(unitNumber) {
         engine.softTakeover(eu.group, "mix", true);
     }
 
-    // SHIFT + FX buttons (labelled Deck1 / Head / Deck2 on the controller):
-    // apply this effect unit to deck 1, the headphones or deck 2. Lit = applied.
-    const routeTargets = ["[Channel1]", "[Headphone]", "[Channel2]"];
-    this.routeButton = [];
+    // SHIFT + FX buttons: the beat time of this unit's effects (echo delay,
+    // flanger/phaser period, ...): 1 = half, 2 = back to the default,
+    // 3 = double. Lit while pressed.
+    const beatActions = ["beats_halve", "beats_reset", "beats_double"];
+    this.beatButton = [];
     for (let r = 1; r <= 3; r++) {
-        this.routeButton[r] = new components.Button({
+        this.beatButton[r] = new components.Button({
             midi: [0x93 + unitNumber, 0x62 + r],
             group: eu.group,
-            key: "group_" + routeTargets[r - 1] + "_enable",
-            type: components.Button.prototype.types.toggle,
+            action: beatActions[r - 1],
+            input: function(channel, control, value, status, _group) {
+                const pressed = this.isPress(channel, control, value, status);
+                this.send(pressed ? this.on : this.off);
+                if (!pressed) {
+                    return;
+                }
+                const unit = this.group.slice(0, -1); // "[EffectRack1_EffectUnitN"
+                for (let e = 1; e <= 3; e++) {
+                    script.triggerControl(unit + "_Effect" + e + "]", this.action);
+                }
+            },
         });
     }
 

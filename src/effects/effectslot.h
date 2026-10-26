@@ -160,6 +160,10 @@ class EffectSlot : public QObject {
 
     void loadParameters();
     void unloadEffect();
+    /// Multiply the beat time of the loaded effect (echo delay, LFO period,
+    /// ...) by `factor`; 0 = back to the default. Controls beats_halve,
+    /// beats_double, beats_reset. Effects without one are left alone.
+    void scaleBeats(double factor);
 
     const unsigned int m_iEffectNumber;
     QHash<EffectParameterType, unsigned int> m_iNumParameterSlots;
@@ -191,6 +195,9 @@ class EffectSlot : public QObject {
     std::unique_ptr<ControlObject> m_pControlClear;
     std::unique_ptr<ControlPotmeter> m_pControlMetaParameter;
     std::unique_ptr<ControlPushButton> m_pControlShowPresetList;
+    std::unique_ptr<ControlPushButton> m_pControlBeatsHalve;
+    std::unique_ptr<ControlPushButton> m_pControlBeatsDouble;
+    std::unique_ptr<ControlPushButton> m_pControlBeatsReset;
 
     SoftTakeover m_metaknobSoftTakeover;
 

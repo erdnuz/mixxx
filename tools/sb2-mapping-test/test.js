@@ -308,11 +308,18 @@ test("SHIFT + KEYLOCK glides tempo all the way to 0 and resets key", () => {
     assert.deepStrictEqual(sets(D1, "pitch_adjust").slice(-1), [0]);
 });
 
-test("SHIFT + FX buttons route the unit; SHIFT + FX knob = super knob", () => {
-    S.effectUnit[1].routeButton[1].input(0, 0x63, 0x7F, 0x94, "");
-    S.effectUnit[1].routeButton[2].input(0, 0x64, 0x7F, 0x94, "");
-    assert.deepStrictEqual(sets("[EffectRack1_EffectUnit1]", "group_[Channel1]_enable"), [1]);
-    assert.deepStrictEqual(sets("[EffectRack1_EffectUnit1]", "group_[Headphone]_enable"), [1]);
+test("SHIFT + FX buttons: beat time half / default / double; SHIFT + FX knob = super knob", () => {
+    const fx = (e) => "[EffectRack1_EffectUnit1_Effect" + e + "]";
+    S.effectUnit[1].beatButton[1].input(0, 0x63, 0x7F, 0x94, "");
+    S.effectUnit[1].beatButton[1].input(0, 0x63, 0x00, 0x94, "");
+    S.effectUnit[1].beatButton[2].input(0, 0x64, 0x7F, 0x94, "");
+    S.effectUnit[1].beatButton[3].input(0, 0x65, 0x7F, 0x94, "");
+    for (let e = 1; e <= 3; e++) {
+        assert.deepStrictEqual(sets(fx(e), "beats_halve"), [1]);
+        assert.deepStrictEqual(sets(fx(e), "beats_reset"), [1]);
+        assert.deepStrictEqual(sets(fx(e), "beats_double"), [1]);
+    }
+    assert.deepStrictEqual(leds(0x94, 0x63), [0x7F, 0x00]); // lit while held, once per press
     S.effectUnit[1].superKnob.inputMSB(0, 0x00, 0x40, 0xB4, "");
     S.effectUnit[1].superKnob.inputLSB(0, 0x20, 0x00, 0xB4, "");
     const p = log.filter((e) => e[0] === "param" && e[2] === "super1" && e[1] === "[EffectRack1_EffectUnit1]");

@@ -93,8 +93,9 @@ Library playlists
 
 Effects
 * FX buttons: tap = select effect, hold = on/off (as before).
-* SHIFT + FX buttons (Deck1 / Head / Deck2): apply the effect unit to deck 1,
-  the headphones or deck 2 (lit = applied).
+* SHIFT + FX buttons = beat time of that side's effects (echo delay,
+  flanger/phaser/autopan period, tremolo rate): FX 1 half, FX 2 back to the
+  default, FX 3 double.
 * SHIFT + FX knob: the unit's super knob.
 
 Options (on/off for each of these) are at the top of

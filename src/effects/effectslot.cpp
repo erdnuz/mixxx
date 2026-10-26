@@ -1,6 +1,7 @@
 #include "effects/effectslot.h"
 
 #include <QDebug>
+#include <algorithm>
 
 #include "control/controlencoder.h"
 #include "control/controlpushbutton.h"
@@ -21,6 +22,25 @@
 
 // The maximum number of effect parameters we're going to support.
 constexpr unsigned int kDefaultMaxParameters = 16;
+
+namespace {
+
+/// The parameter of a built-in effect that sets its time in beats.
+struct BeatParameter {
+    const char* effectId;
+    const char* parameterId;
+    bool cyclesPerBeat; // true: more = faster (tremolo rate)
+};
+constexpr BeatParameter kBeatParameters[] = {
+        {"org.mixxx.effects.echo", "delay_time", false},
+        {"org.mixxx.effects.glitch", "delay_time", false},
+        {"org.mixxx.effects.phaser", "lfo_period", false},
+        {"org.mixxx.effects.flanger", "speed", false},
+        {"org.mixxx.effects.autopan", "period", false},
+        {"org.mixxx.effects.tremolo", "rate", true},
+};
+
+} // namespace
 
 EffectSlot::EffectSlot(const QString& group,
         EffectsManager* pEffectsManager,
@@ -129,6 +149,20 @@ EffectSlot::EffectSlot(const QString& group,
         addEffectParameterSlot(EffectParameterType::Knob);
         addEffectParameterSlot(EffectParameterType::Button);
     }
+
+    const auto addBeatsButton = [this](std::unique_ptr<ControlPushButton>* pButton,
+                                        const QString& item,
+                                        double factor) {
+        *pButton = std::make_unique<ControlPushButton>(ConfigKey(m_group, item));
+        connect(pButton->get(), &ControlObject::valueChanged, this, [this, factor](double v) {
+            if (v > 0) {
+                scaleBeats(factor);
+            }
+        });
+    };
+    addBeatsButton(&m_pControlBeatsHalve, QStringLiteral("beats_halve"), 0.5);
+    addBeatsButton(&m_pControlBeatsDouble, QStringLiteral("beats_double"), 2.0);
+    addBeatsButton(&m_pControlBeatsReset, QStringLiteral("beats_reset"), 0.0);
 
     m_pControlMetaParameter = std::make_unique<ControlPotmeter>(
             ConfigKey(m_group, "meta"), 0.0, 1.0);
@@ -543,6 +577,51 @@ void EffectSlot::slotEffectSelector(double v) {
         loadEffectWithDefaults(m_pVisibleEffects->next(m_pManifest));
     } else if (v < 0) {
         loadEffectWithDefaults(m_pVisibleEffects->previous(m_pManifest));
+    }
+}
+
+void EffectSlot::scaleBeats(double factor) {
+    if (!m_pManifest) {
+        return;
+    }
+    const BeatParameter* pBeatParameter = nullptr;
+    for (const auto& beatParameter : kBeatParameters) {
+        if (m_pManifest->id() == QLatin1String(beatParameter.effectId)) {
+            pBeatParameter = &beatParameter;
+            break;
+        }
+    }
+    if (!pBeatParameter) {
+        return;
+    }
+    // Through the knob's control, so skins and controllers follow
+    const auto& knobSlots = m_parameterSlots.value(EffectParameterType::Knob);
+    for (int i = 0; i < knobSlots.size(); ++i) {
+        const auto& pSlot = knobSlots.at(i);
+        if (!pSlot->isLoaded() ||
+                pSlot->getManifest()->id() != QLatin1String(pBeatParameter->parameterId)) {
+            continue;
+        }
+        const auto pManifest = pSlot->getManifest();
+        ControlObject* pControl = ControlObject::getControl(
+                ConfigKey(m_group, QStringLiteral("parameter%1").arg(i + 1)));
+        if (!pControl) {
+            return;
+        }
+        double value = pManifest->getDefault();
+        if (factor > 0) {
+            value = pControl->get() * (pBeatParameter->cyclesPerBeat ? 1.0 / factor : factor);
+            // At 0 (the knob's minimum) there's nothing to scale
+            if (value <= 0) {
+                value = pManifest->getDefault();
+            }
+            // Shorter than 1/8 beat isn't a beat effect any more
+            if (!pBeatParameter->cyclesPerBeat) {
+                value = std::max(value, 1.0 / 8);
+            }
+        }
+        pControl->set(math_clamp(value, pManifest->getMinimum(), pManifest->getMaximum()));
+        return;
     }
 }
 

@@ -176,8 +176,10 @@ New files `res/controllers/Pioneer-DDJ-SB2-Stems.midi.xml` +
   (0x78) = phrase_sync / play_on_phrase / phrase_restart / phrase_loop.
 - SHIFT+TEMPO (0x05/0x25) = key in semitones (`keyFader`, own pick-up,
   follows `rate_dir`); SHIFT+KEYLOCK glides `rate` to 0 + `pitch_adjust` 0.
-- SHIFT+FX buttons (0x63–0x65) route the unit to [Channel1]/[Headphone]/
-  [Channel2]; SHIFT+FX knob (0x00/0x20) = unit `super1`.
+- SHIFT+FX buttons (0x63–0x65) = `beats_halve` / `beats_reset` /
+  `beats_double` on the unit's 3 effect slots (new EffectSlot controls: scale
+  the beat parameter of echo/glitch/phaser/flanger/autopan/tremolo through its
+  knob control, min 1/8 beat); SHIFT+FX knob (0x00/0x20) = unit `super1`.
 - XML rebinding was scripted (by status/midino); `node
   tools/sb2-mapping-test/test.js` loads the real mapping with a stand-in
   engine, checks every XML handler exists and 16 behaviours (runs in CI).

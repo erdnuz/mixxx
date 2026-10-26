@@ -1588,8 +1588,8 @@
             </control>
             <control>
                 <group>[EffectRack1_EffectUnit1]</group>
-                <key>PioneerDDJSB2.effectUnit[1].routeButton[1].input</key>
-                <description>SHIFT + FX1-1: route effect unit 1 to deck 1/3</description>
+                <key>PioneerDDJSB2.effectUnit[1].beatButton[1].input</key>
+                <description>SHIFT + FX1-1: effect unit 1 beat time halved</description>
                 <status>0x94</status>
                 <midino>0x63</midino>
                 <options>
@@ -1608,8 +1608,8 @@
             </control>
             <control>
                 <group>[EffectRack1_EffectUnit1]</group>
-                <key>PioneerDDJSB2.effectUnit[1].routeButton[2].input</key>
-                <description>SHIFT + FX1-2: route effect unit 1 to headphones</description>
+                <key>PioneerDDJSB2.effectUnit[1].beatButton[2].input</key>
+                <description>SHIFT + FX1-2: effect unit 1 beat time back to default</description>
                 <status>0x94</status>
                 <midino>0x64</midino>
                 <options>
@@ -1628,8 +1628,8 @@
             </control>
             <control>
                 <group>[EffectRack1_EffectUnit1]</group>
-                <key>PioneerDDJSB2.effectUnit[1].routeButton[3].input</key>
-                <description>SHIFT + FX1-3: route effect unit 1 to deck 2/4</description>
+                <key>PioneerDDJSB2.effectUnit[1].beatButton[3].input</key>
+                <description>SHIFT + FX1-3: effect unit 1 beat time doubled</description>
                 <status>0x94</status>
                 <midino>0x65</midino>
                 <options>
@@ -1688,8 +1688,8 @@
             </control>
             <control>
                 <group>[EffectRack1_EffectUnit2]</group>
-                <key>PioneerDDJSB2.effectUnit[2].routeButton[1].input</key>
-                <description>SHIFT + FX2-1: route effect unit 2 to deck 1/3</description>
+                <key>PioneerDDJSB2.effectUnit[2].beatButton[1].input</key>
+                <description>SHIFT + FX2-1: effect unit 2 beat time halved</description>
                 <status>0x95</status>
                 <midino>0x63</midino>
                 <options>
@@ -1708,8 +1708,8 @@
             </control>
             <control>
                 <group>[EffectRack1_EffectUnit2]</group>
-                <key>PioneerDDJSB2.effectUnit[2].routeButton[2].input</key>
-                <description>SHIFT + FX2-2: route effect unit 2 to headphones</description>
+                <key>PioneerDDJSB2.effectUnit[2].beatButton[2].input</key>
+                <description>SHIFT + FX2-2: effect unit 2 beat time back to default</description>
                 <status>0x95</status>
                 <midino>0x64</midino>
                 <options>
@@ -1728,8 +1728,8 @@
             </control>
             <control>
                 <group>[EffectRack1_EffectUnit2]</group>
-                <key>PioneerDDJSB2.effectUnit[2].routeButton[3].input</key>
-                <description>SHIFT + FX2-3: route effect unit 2 to deck 2/4</description>
+                <key>PioneerDDJSB2.effectUnit[2].beatButton[3].input</key>
+                <description>SHIFT + FX2-3: effect unit 2 beat time doubled</description>
                 <status>0x95</status>
                 <midino>0x65</midino>
                 <options>
