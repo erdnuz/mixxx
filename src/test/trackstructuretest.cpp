@@ -194,6 +194,35 @@ TEST(TrackStructureTest, SidecarRoundTrip) {
     EXPECT_EQ(4, pStructure->sections().size());
 }
 
+TEST(TrackStructureTest, AutoCuesRoundTrip) {
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString track = dir.filePath("Artist - Song.mp3");
+    QFile file(TrackStructure::sidecarPath(track));
+    ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+    file.write(makeJson());
+    file.close();
+
+    // Cues from the mix analysis: recorded, not final
+    EXPECT_TRUE(TrackStructure::recordAutoCues(
+            track, {{0, 44100.0, QStringLiteral("Build")}, {1, 88200.0, QStringLiteral("Drop")}}, false));
+    auto pStructure = TrackStructure::fromSidecar(track);
+    ASSERT_TRUE(pStructure);
+    EXPECT_FALSE(pStructure->cuesApplied());
+    ASSERT_EQ(2, pStructure->autoCues().size());
+    EXPECT_EQ(1, pStructure->autoCues().at(1).slot);
+    EXPECT_DOUBLE_EQ(88200.0, pStructure->autoCues().at(1).frame);
+    EXPECT_EQ(QStringLiteral("Drop"), pStructure->autoCues().at(1).label);
+
+    // Replaced by the stems analysis: final
+    EXPECT_TRUE(TrackStructure::recordAutoCues(track, {{1, 90000.0, QStringLiteral("Drop")}}, true));
+    pStructure = TrackStructure::fromSidecar(track);
+    ASSERT_TRUE(pStructure);
+    EXPECT_TRUE(pStructure->cuesApplied());
+    ASSERT_EQ(1, pStructure->autoCues().size());
+    EXPECT_EQ(4, pStructure->sections().size());
+}
+
 TEST(TrackStructureTest, BarAndPhrasePositions) {
     TrackStructure::Alignment a;
     a.beatsPerBar = 4;

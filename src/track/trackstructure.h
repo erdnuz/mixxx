@@ -43,6 +43,15 @@ class TrackStructure {
         QColor color;
     };
 
+    /// A hot cue Mixxx added from the suggestions ("mixxx_auto_cues"), to
+    /// recognize it later: still in its slot at this position with this
+    /// label means the user hasn't touched it.
+    struct AutoCue {
+        int slot = -1;
+        double frame = 0;
+        QString label;
+    };
+
     /// The structure expressed in beat indices of one particular beat grid.
     /// Beat indices are counted from Beats::cfirstmarker() (can be negative).
     struct Alignment {
@@ -137,6 +146,10 @@ class TrackStructure {
     /// Remember in the sidecar that the suggested hot cues were added to the
     /// library once, so cues the user deletes don't come back.
     static bool markCuesApplied(const QString& trackLocation);
+    /// Store the hot cues added from the suggestions; isFinal also marks
+    /// them applied (sections from stems won't change any more).
+    static bool recordAutoCues(
+            const QString& trackLocation, const QList<AutoCue>& cues, bool isFinal);
 
     /// The stem file stemprep made for this track ("stems" in the sidecar),
     /// to be decoded instead of the track's own file so it plays with stems.
@@ -179,6 +192,9 @@ class TrackStructure {
     bool cuesApplied() const {
         return m_cuesApplied;
     }
+    const QList<AutoCue>& autoCues() const {
+        return m_autoCues;
+    }
 
     /// Snap the structure to a beat grid. The result is cached for the last
     /// grid it was computed for, so this is cheap to call every frame.
@@ -197,6 +213,7 @@ class TrackStructure {
     QList<Section> m_sections;
     QList<CueSuggestion> m_cues;
     bool m_cuesApplied = false;
+    QList<AutoCue> m_autoCues;
     bool m_fromStems = true;
 
     mutable std::mutex m_alignmentMutex;

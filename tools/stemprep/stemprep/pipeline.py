@@ -28,6 +28,8 @@ log = logging.getLogger("stemprep")
 SIDECAR_SUFFIX = ".structure.json"
 # Set by Mixxx in the sidecar once it added the suggested hot cues
 CUES_APPLIED_KEY = "mixxx_cues_applied"
+# Set by Mixxx: the hot cues it added (slot, frame, label)
+AUTO_CUES_KEY = "mixxx_auto_cues"
 
 
 def sidecar_path(audio_path: Path) -> Path:
@@ -121,6 +123,9 @@ def write_sidecar(audio_path: Path, data: dict) -> Path:
     # doesn't bring back cues the user deleted.
     if old.get(CUES_APPLIED_KEY):
         data[CUES_APPLIED_KEY] = old[CUES_APPLIED_KEY]
+    # ...and which cues it added, so it can replace them while untouched
+    if AUTO_CUES_KEY in old:
+        data[AUTO_CUES_KEY] = old[AUTO_CUES_KEY]
     for key in STEMS_KEYS:
         if key in old and key not in data:
             data[key] = old[key]

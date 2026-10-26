@@ -8,6 +8,7 @@
 #include <QSaveFile>
 #include <algorithm>
 #include <cmath>
+#include <functional>
 
 #include "util/logger.h"
 
@@ -194,6 +195,17 @@ TrackStructurePointer TrackStructure::fromJson(const QByteArray& json, QString* 
     pStructure->m_downbeats = toDoubleVector(root.value(QStringLiteral("downbeats")));
     pStructure->m_phrases = toDoubleVector(root.value(QStringLiteral("phrases")));
     pStructure->m_cuesApplied = root.value(QStringLiteral("mixxx_cues_applied")).toBool(false);
+    const QJsonArray autoCues = root.value(QStringLiteral("mixxx_auto_cues")).toArray();
+    for (const auto& value : autoCues) {
+        const QJsonObject obj = value.toObject();
+        AutoCue cue;
+        cue.slot = obj.value(QStringLiteral("slot")).toInt(-1);
+        cue.frame = obj.value(QStringLiteral("frame")).toDouble(0);
+        cue.label = obj.value(QStringLiteral("label")).toString();
+        if (cue.slot >= 0) {
+            pStructure->m_autoCues.append(cue);
+        }
+    }
     pStructure->m_fromStems = root.value(QStringLiteral("tier")).toString() != QStringLiteral("mix");
 
     const QJsonArray sections = root.value(QStringLiteral("sections")).toArray();
@@ -280,9 +292,9 @@ QString TrackStructure::stemCacheFor(
     return stemPath;
 }
 
-// static
-bool TrackStructure::markCuesApplied(const QString& trackLocation) {
-    const QString path = sidecarPath(trackLocation);
+namespace {
+
+bool updateSidecar(const QString& path, const std::function<void(QJsonObject*)>& update) {
     QFile file(path);
     if (!file.open(QIODevice::ReadOnly)) {
         return false;
@@ -293,7 +305,7 @@ bool TrackStructure::markCuesApplied(const QString& trackLocation) {
         return false;
     }
     QJsonObject root = doc.object();
-    root.insert(QStringLiteral("mixxx_cues_applied"), true);
+    update(&root);
     QSaveFile out(path);
     if (!out.open(QIODevice::WriteOnly)) {
         kLogger.warning() << "Cannot write" << path;
@@ -301,6 +313,34 @@ bool TrackStructure::markCuesApplied(const QString& trackLocation) {
     }
     out.write(QJsonDocument(root).toJson(QJsonDocument::Indented));
     return out.commit();
+}
+
+} // namespace
+
+// static
+bool TrackStructure::markCuesApplied(const QString& trackLocation) {
+    return updateSidecar(sidecarPath(trackLocation), [](QJsonObject* pRoot) {
+        pRoot->insert(QStringLiteral("mixxx_cues_applied"), true);
+    });
+}
+
+// static
+bool TrackStructure::recordAutoCues(
+        const QString& trackLocation, const QList<AutoCue>& cues, bool isFinal) {
+    return updateSidecar(sidecarPath(trackLocation), [&](QJsonObject* pRoot) {
+        QJsonArray array;
+        for (const auto& cue : cues) {
+            array.append(QJsonObject{
+                    {QStringLiteral("slot"), cue.slot},
+                    {QStringLiteral("frame"), cue.frame},
+                    {QStringLiteral("label"), cue.label},
+            });
+        }
+        pRoot->insert(QStringLiteral("mixxx_auto_cues"), array);
+        if (isFinal) {
+            pRoot->insert(QStringLiteral("mixxx_cues_applied"), true);
+        }
+    });
 }
 
 std::shared_ptr<const TrackStructure::Alignment> TrackStructure::alignTo(

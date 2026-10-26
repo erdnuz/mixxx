@@ -1,6 +1,7 @@
 #include "mixer/phrasecontrol.h"
 
 #include <QFileInfo>
+#include <QSet>
 #include <cmath>
 
 #include "control/controlobject.h"
@@ -98,6 +99,8 @@ void PhraseControl::trackLoaded(TrackPointer pTrack) {
     }
     m_pTrack = std::move(pTrack);
     m_pCuesAddedTrack = nullptr;
+    m_cuesAddedFinal = false;
+    m_updateCuesWhenStopped = false;
     if (m_pTrack) {
         connect(m_pTrack.get(),
                 &Track::structureUpdated,
@@ -186,6 +189,10 @@ void PhraseControl::slotPlayChanged(double play) {
     if (play == 0 && m_reloadWhenStopped) {
         m_reloadWhenStopped = false;
         updateStemsReady(); // still new? then reload now
+    }
+    if (play == 0 && m_updateCuesWhenStopped) {
+        m_updateCuesWhenStopped = false;
+        slotStructureOrBeatsChanged();
     }
 }
 
@@ -315,18 +322,28 @@ void PhraseControl::maybeAddCues(const TrackPointer& pTrack) {
     if (!m_pConfig->getValue(ConfigKey(kConfigGroup, kAutoHotcuesKey), true)) {
         return;
     }
-    if (m_pCuesAddedTrack == pTrack.get()) {
-        return;
-    }
     const auto pStructure = pTrack->getStructure();
     const auto pBeats = pTrack->getBeats();
-    if (!pStructure || !pBeats || pStructure->cuesApplied() ||
-            pStructure->cueSuggestions().isEmpty()) {
+    if (!pStructure || !pBeats || pStructure->cuesApplied()) {
         return;
     }
-    if (!pStructure->analyzedFromStems()) {
-        // Sections from the mix only may still move once stems are made;
-        // cues added now would stay in the wrong place.
+    // Sections from the mix only may still move once stems are made: their
+    // cues are added now and replaced by the ones from the stems analysis,
+    // as long as the user hasn't touched them.
+    const bool isFinal = pStructure->analyzedFromStems();
+    if (m_pCuesAddedTrack == pTrack.get() && (m_cuesAddedFinal || !isFinal)) {
+        return; // done during this load (the sidecar may be read-only)
+    }
+    const auto& previous = pStructure->autoCues();
+    if (!isFinal && !previous.isEmpty()) {
+        return; // the cues of the mix analysis are in already
+    }
+    if (previous.isEmpty() && pStructure->cueSuggestions().isEmpty()) {
+        return;
+    }
+    if (!previous.isEmpty() && m_pPlay->toBool()) {
+        // Don't move cues under a playing deck
+        m_updateCuesWhenStopped = true;
         return;
     }
     const auto pAlignment = pStructure->alignTo(pBeats);
@@ -338,9 +355,23 @@ void PhraseControl::maybeAddCues(const TrackPointer& pTrack) {
         return;
     }
 
-    // Mark first so a failure below can't make this run again and again.
     m_pCuesAddedTrack = pTrack.get();
-    const bool marked = mixxx::TrackStructure::markCuesApplied(pTrack->getLocation());
+    m_cuesAddedFinal = isFinal;
+
+    // Automatic cues still where Mixxx put them are replaced; for moved,
+    // renamed or deleted ones the user's choice stands.
+    QSet<QString> userLabels;
+    int removed = 0;
+    for (const auto& autoCue : previous) {
+        const CuePointer pCue = pTrack->findHotcueByIndex(autoCue.slot);
+        if (pCue && pCue->getLabel() == autoCue.label &&
+                std::abs(pCue->getPosition().value() - autoCue.frame) < 1.0) {
+            pTrack->removeCue(pCue);
+            removed++;
+        } else {
+            userLabels.insert(autoCue.label);
+        }
+    }
 
     QList<bool> usedSlots(kMaxAutoHotcueSlots, false);
     QList<mixxx::audio::FramePos> existing;
@@ -355,8 +386,11 @@ void PhraseControl::maybeAddCues(const TrackPointer& pTrack) {
         existing.append(pCue->getPosition());
     }
 
-    int added = 0;
+    QList<mixxx::TrackStructure::AutoCue> added;
     for (const auto& suggestion : pStructure->cueSuggestions()) {
+        if (userLabels.contains(suggestion.label)) {
+            continue;
+        }
         const auto index = mixxx::TrackStructure::closestBeatIndex(
                 *pBeats, suggestion.positionSeconds);
         if (!index) {
@@ -396,12 +430,13 @@ void PhraseControl::maybeAddCues(const TrackPointer& pTrack) {
         if (pCue) {
             pCue->setLabel(suggestion.label);
             existing.append(position);
-            added++;
+            added.append({slot, position.value(), suggestion.label});
         }
     }
-    kLogger.info() << "Added" << added << "structure hot cues to" << pTrack->getInfo();
-    if (marked) {
-        // Re-read so cuesApplied() is true in memory as well.
+    kLogger.info() << "Added" << added.size() << "structure hot cues (replaced" << removed
+                   << ") to" << pTrack->getInfo() << (isFinal ? "" : "from the mix analysis");
+    if (mixxx::TrackStructure::recordAutoCues(pTrack->getLocation(), added, isFinal)) {
+        // Re-read so autoCues()/cuesApplied() are up to date in memory too
         pTrack->reloadStructure();
     }
 }

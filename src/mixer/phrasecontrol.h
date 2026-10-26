@@ -28,10 +28,11 @@ class ControlPushButton;
 ///                                     the loaded track; they play after
 ///                                     loading it again
 ///
-/// When a track with structure data from stems is loaded for the first time,
-/// the suggested hot cues (BUILD, DROP, BREAKDOWN...) are added to free hot
-/// cue slots, unless [Structure],AutoHotcues is 0. Analyses from the full
-/// mix only are shown but don't add cues (they may still improve).
+/// When a track's structure data appears, the suggested hot cues (BUILD,
+/// DROP, BREAKDOWN...) are added to free hot cue slots, unless
+/// [Structure],AutoHotcues is 0. Cues from an analysis of the full mix are
+/// replaced by those of the stems analysis (while the deck is stopped),
+/// except cues the user moved, renamed or deleted.
 ///
 /// Loading a track into a deck asks stemprep for stems (StemprepQueue); the
 /// structure file is watched, so sections appear and improve while the track
@@ -76,6 +77,10 @@ class PhraseControl : public QObject {
     // Track for which hot cues were already added during this load, so a
     // read-only structure file can't make us add them again and again.
     const Track* m_pCuesAddedTrack = nullptr;
+    // ... and whether they came from the stems analysis (final)
+    bool m_cuesAddedFinal = false;
+    // Cues from the stems analysis arrived while the deck was playing
+    bool m_updateCuesWhenStopped = false;
 
     std::unique_ptr<ControlObject> m_pStructureLoaded;
     std::unique_ptr<ControlPushButton> m_pReload;

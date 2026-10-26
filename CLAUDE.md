@@ -46,7 +46,11 @@ playlist folders like "130 fweak", avg 3.8 min). Stemprep is installed in
    `reloadForNewStems` → BaseTrackPlayerImpl reloads the same track keeping
    position, rate, pitch_adjust and stem volume/mute (deck must be stopped;
    if playing it waits for play=0; skipped while AutoDJ is on;
-   `[Structure] AutoReloadStems`). Auto hot cues only from `"tier": "stems"`.
+   `[Structure] AutoReloadStems`). Auto hot cues are added from the mix
+   analysis and recorded in the sidecar (`mixxx_auto_cues`: slot, frame,
+   label); the `"tier": "stems"` analysis replaces the untouched ones (same
+   slot, position, label; deck stopped) and sets `mixxx_cues_applied`.
+   Moved/renamed/deleted ones keep the user's version (matched by label).
    Control `stems_ready_on_reload`.
 - Stems folder must NOT be a Mixxx library folder (scanner would import the
   .stem.mp4 files as tracks). The library holds `Downloads/`.

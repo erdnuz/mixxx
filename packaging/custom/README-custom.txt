@@ -20,9 +20,11 @@ What's new in this build
   lines on phrase and section starts, a colored strip with the section names
   (Intro, Build, Drop, Breakdown, Outro) along the bottom; the overview
   shows the same strip.
-* Hot cues are added at builds, drops and breakdowns the first time a track
-  with stems analysis is loaded (only into empty slots 1-8). Off:
-  [Structure] AutoHotcues 0 in mixxx.cfg.
+* Hot cues are added at builds, drops and breakdowns as soon as the section
+  names appear (only into empty slots 1-8). When the stems are ready they
+  move to the improved positions (while the deck is stopped); cues you moved,
+  renamed or deleted are left alone. Off: [Structure] AutoHotcues 0 in
+  mixxx.cfg.
 * BRAKE button on each deck (LateNight skin): slow down to a stop like a
   turntable; press again to spin back up.
 * Controls for mappings / keyboard ([ChannelN]):
