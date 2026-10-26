@@ -92,7 +92,7 @@ QList<TrackId> FolderPlaylists::tracksInFolder(const QString& folder) const {
             "INNER JOIN track_locations ON library.location = track_locations.id "
             "WHERE library.mixxx_deleted = 0 AND track_locations.fs_deleted = 0 "
             "AND track_locations.location LIKE :prefix ESCAPE '\\'"));
-    query.bindValue(QStringLiteral(":prefix"), escapeLike(prefix) + QChar('%'));
+    query.bindValue(QStringLiteral(":prefix"), QString(escapeLike(prefix) + QChar('%')));
     if (!query.exec()) {
         kLogger.warning() << "Query failed for" << folder << query.lastError();
         return {};
