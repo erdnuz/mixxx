@@ -42,24 +42,50 @@ PioneerDDJSB2.jumpPreviewPosition = 0.5;
 // switched off. Pressing it again while stopped (or still slowing down) spins
 // the track back up. If false, SHIFT + PLAY plays in reverse (original mapping).
 PioneerDDJSB2.shiftPlayBrake = true;
-// How quickly the brake stops the track: 1 is about 1.5 seconds, 2 is faster,
-// 0.5 is slower.
-PioneerDDJSB2.brakeFactor = 1.0;
-// How quickly the track spins back up after a brake.
-PioneerDDJSB2.softStartFactor = 1.0;
+// Seconds the brake takes from full speed to a stop. Leave at null to use the
+// deck's setting ([ChannelN],brake_time, default 2), which skins can change too.
+PioneerDDJSB2.brakeSeconds = null;
+// Seconds to spin back up to full speed (null: [ChannelN],softstart_time, default 0.8).
+PioneerDDJSB2.softStartSeconds = null;
 
 // If true, on tracks with stems the CUE LOOP pads (SHIFT + MANUAL LOOP) mute
 // and unmute Drums, Bass, Melody and Vocals; a lit pad means the stem is
 // playing. SHIFT + pad solos that stem (press again to bring all back).
+// Hold a stem pad and turn FILTER to filter just that stem.
 // Tracks without stems keep the EQ kill / mute pads.
 PioneerDDJSB2.stemPads = true;
 
 // If true, the BANK pads (SHIFT + SAMPLER) navigate the track structure found
 // by stemprep: pad 1 / 2 = previous / next section (Intro, Build, Drop...),
 // pad 3 / 4 = previous / next phrase. Jumps keep the position inside the bar,
-// so the mix stays in phase. Pad 4 blinks during the last bar before the next
-// phrase. SHIFT + pads still eject samplers. If false, the pads load samplers.
+// so the mix stays in phase. In the last 4 bars before a new phrase the pads
+// count down (4 lit, 3, 2, then pad 1 blinks). If false, the pads load samplers.
 PioneerDDJSB2.phraseBankPads = true;
+
+// If true, SYNC on a stopped deck also lines up bars and phrases with the
+// playing deck (Mixxx itself only lines up beats). Needs structure data on
+// both decks.
+PioneerDDJSB2.syncAlignsPhrases = true;
+
+// If true, the stem pads take effect exactly on the next downbeat, so a drop
+// or breakdown can be set up ahead. Pending pads blink until then.
+PioneerDDJSB2.stemsOnBar = true;
+
+// If true:
+//   MANUAL LOOP pads = BAR LOOPS: 1, 2, 4, 8 bars starting on the bar's
+//     downbeat (press again to end the loop)
+//   SHIFT + pad in MANUAL LOOP mode = SLICER: hold pad N to play from beat N
+//     of the current bar; on release the track carries on where it would
+//     have been (the pad of the beat that's playing is lit)
+//   SHIFT + BANK pads = 1 phrase sync, 2 start on the other deck's next phrase
+//     (blinks while waiting; press again to cancel), 3 back to the start of
+//     this phrase, 4 loop this phrase
+// If false: the classic manual loop pads and SHIFT + BANK = sampler eject.
+PioneerDDJSB2.performancePads = true;
+
+// SHIFT + TEMPO slider changes the key in whole semitones, up to this many
+// either way. SHIFT + KEYLOCK resets tempo and key.
+PioneerDDJSB2.keyShiftRange = 6;
 
 /*
     Pioneer DDJ-SB2 mapping for Mixxx, with stem pads, brake and phrase navigation
@@ -68,8 +94,10 @@ PioneerDDJSB2.phraseBankPads = true;
 
     Contributors and change log:
     - erdnuz: stem mute/solo pads, SHIFT+PLAY brake / soft start, phrase and
-      section navigation on the BANK pads (needs the custom Mixxx build with
-      structure support and tracks analyzed by tools/stemprep)
+      section navigation on the BANK pads, bar/phrase sync, on-the-bar stems,
+      bar loops, slicer, per-stem filter, key shift, effect routing (needs the
+      custom Mixxx build with structure support and tracks analyzed by
+      tools/stemprep)
     - Be (be.0@gmx.com): update effects and autoloop mode for Mixxx 2.1, fix level meter scaling,
       remove LED flickering when pressing shift, start porting to Components
     - Michael Stahl (DG3NEC): original DDJ-SB2 mapping for Mixxx 2.0
@@ -118,7 +146,6 @@ PioneerDDJSB2.phraseBankPads = true;
 ///////////////////////////////////////////////////////////////
 //               INIT, SHUTDOWN & GLOBAL HELPER              //
 ///////////////////////////////////////////////////////////////
-PioneerDDJSB2.longButtonPress = false;
 PioneerDDJSB2.speedRateToNormalTimer = new Array(4);
 
 PioneerDDJSB2.init = function(_id) {
@@ -156,10 +183,8 @@ PioneerDDJSB2.init = function(_id) {
 
     PioneerDDJSB2.shiftPressed = false;
 
-    PioneerDDJSB2.chFaderStart = [
-        null,
-        null
-    ];
+    // Fader start position per MIDI channel (deck 1-4 = index 0-3)
+    PioneerDDJSB2.chFaderStart = [null, null, null, null];
 
     PioneerDDJSB2.scratchMode = [false, false, false, false];
 
@@ -210,6 +235,8 @@ PioneerDDJSB2.init = function(_id) {
     if (PioneerDDJSB2.twinkleVumeterAutodjOn) {
         PioneerDDJSB2.vuMeterTimer = engine.beginTimer(100, PioneerDDJSB2.vuMeterTwinkle);
     }
+    // Blinking LEDs: brake, stems waiting for the bar, start on phrase
+    PioneerDDJSB2.blinkTimer = engine.beginTimer(125, PioneerDDJSB2.blinkTick);
 
     // request the positions of the knobs and faders from the controller
     midi.sendShortMsg(0x9B, 0x09, 0x7f);
@@ -223,11 +250,13 @@ PioneerDDJSB2.Deck = function(deckNumber) {
         if (value > 0) {
             theDeck.shift();
             PioneerDDJSB2.shiftPressed = true;
-            PioneerDDJSB2.chFaderStart[deckNumber] = null;
+            PioneerDDJSB2.chFaderStart[deckNumber - 1] = null;
         } else {
             theDeck.unshift();
             PioneerDDJSB2.shiftPressed = false;
         }
+        // The key slider picks up again next time (no jumps)
+        theDeck.keyFader.pickedUp = false;
     };
 
     this.playButton = new components.PlayButton({
@@ -267,7 +296,23 @@ PioneerDDJSB2.Deck = function(deckNumber) {
         midi: [0x90 + deckNumber - 1, 0x58],
         shiftOffset: 4,
         shiftControl: true,
-        sendShifted: true,
+        // The SHIFT LED (0x5C) shows quantize instead, see quantizeLed
+        sendShifted: false,
+        // SyncButton sets its own input() for each layer: wrap the plain one
+        unshift: function() {
+            components.SyncButton.prototype.unshift.call(this);
+            const syncInput = this.input;
+            this.input = function(channel, control, value, status, group) {
+                syncInput.call(this, channel, control, value, status, group);
+                // A tap (beatsync) on a stopped deck: also line up bars and phrases
+                if (!this.isPress(channel, control, value, status) &&
+                        PioneerDDJSB2.syncAlignsPhrases &&
+                        engine.getValue(this.group, "play") === 0 &&
+                        engine.getValue(this.group, "sync_enabled") === 0) {
+                    script.triggerControl(this.group, "phrase_sync");
+                }
+            };
+        },
     });
 
     var effectUnitNumber = deckNumber;
@@ -312,13 +357,27 @@ PioneerDDJSB2.Deck = function(deckNumber) {
     }
 
     this.quickEffectKnob = new components.Pot({
+        input: function(channel, control, value, status, group) {
+            // Holding a stem pad: this knob filters only that stem
+            const stem = PioneerDDJSB2.heldStemPad[theDeck.group];
+            if (!this.isShifted && stem !== undefined && PioneerDDJSB2.stemPadsActive(theDeck.group)) {
+                const full = this.MSB !== undefined ? (this.MSB << 7) + value : value << 7;
+                engine.setParameter(PioneerDDJSB2.stemQuickEffectGroup(theDeck.group, stem),
+                    "super1", full / 0x3FFF);
+                PioneerDDJSB2.heldStemTurned[theDeck.group] = true;
+                return;
+            }
+            components.Pot.prototype.input.call(this, channel, control, value, status, group);
+        },
         unshift: function() {
+            this.isShifted = false;
             this.group = "[QuickEffectRack1_[Channel" + deckNumber + "]]";
             this.inKey = "super1";
             this.disconnect();
             this.connect();
         },
         shift: function() {
+            this.isShifted = true;
             var focusedEffect = engine.getValue("[EffectRack1_EffectUnit" + effectUnitNumber + "]", "focused_effect");
             this.group = "[EffectRack1_EffectUnit" + effectUnitNumber + "_Effect" + focusedEffect + "]";
             this.inKey = "parameter5";
@@ -331,6 +390,34 @@ PioneerDDJSB2.Deck = function(deckNumber) {
         inKey: "rate",
         //         relative: true,
         invert: true,
+    });
+
+    // SHIFT + TEMPO: key in whole semitones. It only takes over once the
+    // slider reaches the current key, so the key never jumps.
+    this.keyFader = new components.Pot({
+        inKey: "pitch_adjust",
+        pickedUp: false,
+        input: function(channel, control, value, _status, _group) {
+            const full = this.MSB !== undefined ? (this.MSB << 7) + value : value << 7;
+            const range = PioneerDDJSB2.keyShiftRange;
+            // Same direction as the tempo slider (inverted like it; rate_dir is
+            // Mixxx's "slider up = faster/slower" setting)
+            const direction = engine.getValue(theDeck.group, "rate_dir") < 0 ? -1 : 1;
+            const semitones = direction * Math.round((0.5 - full / 0x3FFF) * 2 * range);
+            const current = Math.round(engine.getValue(theDeck.group, "pitch_adjust"));
+            if (!this.pickedUp) {
+                if (semitones !== current) {
+                    return;
+                }
+                this.pickedUp = true;
+            }
+            if (semitones !== current) {
+                engine.setValue(theDeck.group, "pitch_adjust", semitones);
+            }
+        },
+        // No output and no soft takeover: input() handles the pick-up
+        connect: function() {},
+        output: function() {},
     });
 
     this.topPadRow = new components.ComponentContainer();
@@ -440,26 +527,19 @@ PioneerDDJSB2.shutdown = function() {
     }
 };
 
-PioneerDDJSB2.longButtonPressWait = function() {
-    engine.stopTimer(PioneerDDJSB2.longButtonPressTimer);
-    PioneerDDJSB2.longButtonPress = true;
-};
-
+// One step of gliding the tempo slider back to 0 (SHIFT + KEYLOCK). Works on
+// the slider value directly, so it doesn't depend on the slider direction
+// setting (rate_perm_up/down do).
 PioneerDDJSB2.speedRateToNormal = function(group, deck) {
-    var speed = engine.getValue(group, "rate");
-    if (speed > 0) {
-        engine.setValue(group, "rate_perm_up_small", true);
-        if (engine.getValue(group, "rate") <= 0) {
-            engine.stopTimer(PioneerDDJSB2.speedRateToNormalTimer[deck]);
-            engine.setValue(group, "rate", 0);
-        }
-    } else if (speed < 0) {
-        engine.setValue(group, "rate_perm_down_small", true);
-        if (engine.getValue(group, "rate") >= 0) {
-            engine.stopTimer(PioneerDDJSB2.speedRateToNormalTimer[deck]);
-            engine.setValue(group, "rate", 0);
-        }
+    const step = 0.005; // of the full slider range per tick
+    const rate = engine.getValue(group, "rate");
+    if (Math.abs(rate) <= step) {
+        engine.setValue(group, "rate", 0);
+        engine.stopTimer(PioneerDDJSB2.speedRateToNormalTimer[deck]);
+        PioneerDDJSB2.speedRateToNormalTimer[deck] = 0;
+        return;
     }
+    engine.setValue(group, "rate", rate - Math.sign(rate) * step);
 };
 
 
@@ -554,6 +634,7 @@ PioneerDDJSB2.bindDeckControlConnections = function(channelGroup, isUnbinding) {
             "filterHighKill": "PioneerDDJSB2.highKillLed",
             "mute": "PioneerDDJSB2.muteLed",
             "loop_enabled": "PioneerDDJSB2.loopExitLed",
+            "quantize": "PioneerDDJSB2.quantizeLed",
         };
 
     if (PioneerDDJSB2.invertVinylSlipButton) {
@@ -586,19 +667,6 @@ PioneerDDJSB2.bindNonDeckControlConnections = function(isUnbinding) {
         engine.connectControl("[Channel2]", "vu_meter", "PioneerDDJSB2.VuMeterLeds", isUnbinding);
         engine.connectControl("[Channel3]", "vu_meter", "PioneerDDJSB2.VuMeterLeds", isUnbinding);
         engine.connectControl("[Channel4]", "vu_meter", "PioneerDDJSB2.VuMeterLeds", isUnbinding);
-    }
-};
-
-PioneerDDJSB2.bindAllControlConnections = function(isUnbinding) {
-    var samplerIndex,
-        channelIndex;
-
-    for (samplerIndex = 1; samplerIndex <= 4; samplerIndex++) {
-        PioneerDDJSB2.bindSamplerControlConnections("[Sampler" + samplerIndex + "]", isUnbinding);
-    }
-
-    for (channelIndex = 1; channelIndex <= 2; channelIndex++) {
-        PioneerDDJSB2.bindDeckControlConnections("[Channel" + channelIndex + "]", isUnbinding);
     }
 };
 
@@ -672,20 +740,6 @@ PioneerDDJSB2.deckFaderLSB = function(channel, control, value, status, group) {
 //           SINGLE MESSAGE MIDI INPUT HANDLERS              //
 ///////////////////////////////////////////////////////////////
 
-PioneerDDJSB2.shiftButton = function(channel, control, value, _status, _group) {
-    var index = 0;
-    PioneerDDJSB2.shiftPressed = (value === 0x7F);
-    for (index in PioneerDDJSB2.chFaderStart) {
-        PioneerDDJSB2.chFaderStart[index] = null;
-    }
-};
-
-PioneerDDJSB2.playButton = function(channel, control, value, status, group) {
-    if (value) {
-        script.toggleControl(PioneerDDJSB2.deckSwitchTable[group], "play");
-    }
-};
-
 PioneerDDJSB2.headphoneCueButton = function(channel, control, value, status, group) {
     if (value) {
         script.toggleControl(group, "pfl");
@@ -708,10 +762,6 @@ PioneerDDJSB2.clearHotCueButtons = function(channel, control, value, status, gro
     if (value) {
         engine.setValue(PioneerDDJSB2.deckSwitchTable[group], "hotcue_" + hotCueIndex + "_clear", 1);
     }
-};
-
-PioneerDDJSB2.cueButton = function(channel, control, value, status, group) {
-    engine.setValue(PioneerDDJSB2.deckSwitchTable[group], "cue_default", value);
 };
 
 PioneerDDJSB2.beatloopRollButtons = function(channel, control, value, status, group) {
@@ -745,12 +795,20 @@ PioneerDDJSB2.keyLockButton = function(channel, control, value, status, group) {
     }
 };
 
+// SHIFT + KEYLOCK: glide the tempo back to 0 and reset the key. (Used to step
+// only once: the timer was one-shot.)
 PioneerDDJSB2.shiftKeyLockButton = function(channel, control, value, status, group) {
-    var deck = status - 0x90;
-    if (value) {
-        engine.stopTimer(PioneerDDJSB2.speedRateToNormalTimer[deck]);
-        PioneerDDJSB2.speedRateToNormalTimer[deck] = engine.beginTimer(PioneerDDJSB2.speedRateToNormalTime, () => { PioneerDDJSB2.speedRateToNormal(group, deck); }, true);
+    const deck = status - 0x90;
+    if (!value) {
+        return;
     }
+    if (PioneerDDJSB2.speedRateToNormalTimer[deck]) {
+        engine.stopTimer(PioneerDDJSB2.speedRateToNormalTimer[deck]);
+    }
+    PioneerDDJSB2.speedRateToNormalTimer[deck] = engine.beginTimer(
+        Math.max(20, PioneerDDJSB2.speedRateToNormalTime / 10),
+        () => { PioneerDDJSB2.speedRateToNormal(group, deck); });
+    engine.setValue(group, "pitch_adjust", 0);
 };
 
 PioneerDDJSB2.loopInButton = function(channel, control, value, status, group) {
@@ -795,26 +853,6 @@ PioneerDDJSB2.loadButton = function(channel, control, value, status, group) {
     if (value) {
         engine.setValue(group, "LoadSelectedTrack", 1);
     }
-};
-
-PioneerDDJSB2.reverseRollButton = function(channel, control, value, status, group) {
-    engine.setValue(PioneerDDJSB2.deckSwitchTable[group], "reverseroll", value);
-};
-
-PioneerDDJSB2.lowKillButton = function(channel, control, value, status, group) {
-    engine.setValue(PioneerDDJSB2.deckSwitchTable[group], "filterLowKill", value ? 1 : 0);
-};
-
-PioneerDDJSB2.midKillButton = function(channel, control, value, status, group) {
-    engine.setValue(PioneerDDJSB2.deckSwitchTable[group], "filterMidKill", value ? 1 : 0);
-};
-
-PioneerDDJSB2.highKillButton = function(channel, control, value, status, group) {
-    engine.setValue(PioneerDDJSB2.deckSwitchTable[group], "filterHighKill", value ? 1 : 0);
-};
-
-PioneerDDJSB2.muteButton = function(channel, control, value, status, group) {
-    engine.setValue(PioneerDDJSB2.deckSwitchTable[group], "mute", value);
 };
 
 
@@ -870,7 +908,14 @@ PioneerDDJSB2.nonPadLedControl = function(deck, ledNumber, active) {
 
 PioneerDDJSB2.headphoneCueLed = function(value, group, _control) {
     PioneerDDJSB2.nonPadLedControl(group, PioneerDDJSB2.nonPadLeds.headphoneCue, value);
-    PioneerDDJSB2.nonPadLedControl(group, PioneerDDJSB2.nonPadLeds.shiftHeadphoneCue, value);
+    // SHIFT + CUE on the other layer's deck (1<->3, 2<->4) toggles this deck's
+    // PFL, so that is where its SHIFT LED shows it
+    PioneerDDJSB2.nonPadLedControl(PioneerDDJSB2.deckShiftSwitchTable[group],
+        PioneerDDJSB2.nonPadLeds.shiftHeadphoneCue, value);
+};
+
+PioneerDDJSB2.quantizeLed = function(value, group, _control) {
+    PioneerDDJSB2.nonPadLedControl(group, PioneerDDJSB2.nonPadLeds.shiftSync, value);
 };
 
 PioneerDDJSB2.keyLockLed = function(value, group, _control) {
@@ -883,15 +928,27 @@ PioneerDDJSB2.slipLed = function(value, group, _control) {
     PioneerDDJSB2.nonPadLedControl(group, PioneerDDJSB2.nonPadLeds.shiftVinyl, value);
 };
 
+// The MANUAL LOOP pad LEDs show the bar loops when performancePads is on
 PioneerDDJSB2.loopInLed = function(value, group, _control) {
-    PioneerDDJSB2.padLedControl(group, PioneerDDJSB2.ledGroups.manualLoop, false, 0, false, value);
+    if (!PioneerDDJSB2.performancePads) {
+        PioneerDDJSB2.padLedControl(group, PioneerDDJSB2.ledGroups.manualLoop, false, 0, false, value);
+    }
 };
 
 PioneerDDJSB2.loopOutLed = function(value, group, _control) {
-    PioneerDDJSB2.padLedControl(group, PioneerDDJSB2.ledGroups.manualLoop, false, 1, false, value);
+    if (!PioneerDDJSB2.performancePads) {
+        PioneerDDJSB2.padLedControl(group, PioneerDDJSB2.ledGroups.manualLoop, false, 1, false, value);
+    }
 };
 
 PioneerDDJSB2.loopExitLed = function(value, group, _control) {
+    if (PioneerDDJSB2.performancePads) {
+        if (!value) {
+            PioneerDDJSB2.activeBarLoop[group] = 0; // the loop ended
+        }
+        PioneerDDJSB2.updateBarLoopLeds(group);
+        return;
+    }
     PioneerDDJSB2.padLedControl(group, PioneerDDJSB2.ledGroups.manualLoop, false, 2, false, value);
 };
 
@@ -938,8 +995,13 @@ PioneerDDJSB2.samplerLeds = function(value, group, _control) {
     for (channel = 0; channel < 4; channel++) {
         PioneerDDJSB2.padLedControl(channel, PioneerDDJSB2.ledGroups.sampler, false, sampler, false, value);
         PioneerDDJSB2.padLedControl(channel, PioneerDDJSB2.ledGroups.sampler, false, sampler, true, value);
-        PioneerDDJSB2.padLedControl(channel, PioneerDDJSB2.ledGroups.sampler, true, sampler, false, value);
-        PioneerDDJSB2.padLedControl(channel, PioneerDDJSB2.ledGroups.sampler, true, sampler, true, value);
+        // BANK pads (and their SHIFT layer) may show the phrase functions instead
+        if (!PioneerDDJSB2.phraseBankPads) {
+            PioneerDDJSB2.padLedControl(channel, PioneerDDJSB2.ledGroups.sampler, true, sampler, false, value);
+        }
+        if (!PioneerDDJSB2.performancePads) {
+            PioneerDDJSB2.padLedControl(channel, PioneerDDJSB2.ledGroups.sampler, true, sampler, true, value);
+        }
     }
 };
 
@@ -1000,7 +1062,7 @@ PioneerDDJSB2.VuMeterLeds = function(value, group, control) {
             midi.sendShortMsg(0xB0 + midiChannel, 2, value);
         }
     } else {
-        if (group === "[Master]") {
+        if (group === "[Main]") {
             if (control === "vu_meter_left") {
                 PioneerDDJSB2.valueVuMeter["[Channel1]_current"] = value;
                 PioneerDDJSB2.valueVuMeter["[Channel3]_current"] = value;
@@ -1211,9 +1273,8 @@ PioneerDDJSB2.EffectUnit = function(unitNumber) {
         output: function(value, _group, _control) {
             this.send((value === this.buttonNumber) ? this.on : this.off);
         },
-        sendShifted: true,
-        shiftControl: true,
-        shiftOffset: 28,
+        // The SHIFT LEDs show the routing instead (routeButton)
+        sendShifted: false,
     });
 
     this.button = [];
@@ -1224,6 +1285,26 @@ PioneerDDJSB2.EffectUnit = function(unitNumber) {
         engine.softTakeover(effectGroup, "meta", true);
         engine.softTakeover(eu.group, "mix", true);
     }
+
+    // SHIFT + FX buttons (labelled Deck1 / Head / Deck2 on the controller):
+    // apply this effect unit to deck 1, the headphones or deck 2. Lit = applied.
+    const routeTargets = ["[Channel1]", "[Headphone]", "[Channel2]"];
+    this.routeButton = [];
+    for (let r = 1; r <= 3; r++) {
+        this.routeButton[r] = new components.Button({
+            midi: [0x93 + unitNumber, 0x62 + r],
+            group: eu.group,
+            key: "group_" + routeTargets[r - 1] + "_enable",
+            type: components.Button.prototype.types.toggle,
+        });
+    }
+
+    // SHIFT + FX knob: the unit's super knob (all its effects' meta knobs)
+    this.superKnob = new components.Pot({
+        group: eu.group,
+        inKey: "super1",
+        max: 0x3FFF,
+    });
 
     this.knob = new components.Pot({
         unshift: function() {
@@ -1256,27 +1337,25 @@ PioneerDDJSB2.EffectUnit = function(unitNumber) {
 //          BRAKE, STEM PADS AND PHRASE NAVIGATION           //
 ///////////////////////////////////////////////////////////////
 
-PioneerDDJSB2.braking = {};
 PioneerDDJSB2.stemConnections = {};
-PioneerDDJSB2.phraseConnections = {};
 PioneerDDJSB2.soloedStem = {};
 PioneerDDJSB2.bankLedState = {};
-
-PioneerDDJSB2.deckNumber = function(group) {
-    return parseInt(group.substring(8, group.length - 1), 10); // "[ChannelN]"
-};
+// Stem pad held down (0-3) per deck, and whether FILTER was turned meanwhile
+PioneerDDJSB2.heldStemPad = {};
+PioneerDDJSB2.heldStemTurned = {};
+// Bar loop length (bars) the pads started, 0 = none
+PioneerDDJSB2.activeBarLoop = {};
+// Slicer pads held per deck
+PioneerDDJSB2.slicerHeld = {};
+// Blink phase for LEDs that blink (toggled every 125 ms)
+PioneerDDJSB2.blinkOn = false;
+PioneerDDJSB2.ledCache = {};
 
 // SHIFT + PLAY: slow down to a stop, or spin back up when stopped / braking.
+// The deck's own brake control does the work, so the skin's brake button
+// and this one share the same state.
 PioneerDDJSB2.brakeOrSoftStart = function(group) {
-    const deck = PioneerDDJSB2.deckNumber(group);
-    const playing = engine.getValue(group, "play") > 0;
-    if (playing && !PioneerDDJSB2.braking[deck]) {
-        PioneerDDJSB2.braking[deck] = true;
-        engine.brake(deck, true, PioneerDDJSB2.brakeFactor);
-    } else {
-        PioneerDDJSB2.braking[deck] = false;
-        engine.softStart(deck, true, PioneerDDJSB2.softStartFactor);
-    }
+    script.triggerControl(group, "brake");
 };
 
 PioneerDDJSB2.stemGroup = function(group, stemNumber) {
@@ -1287,12 +1366,50 @@ PioneerDDJSB2.stemPadsActive = function(group) {
     return PioneerDDJSB2.stemPads && engine.getValue(group, "stem_count") > 0;
 };
 
+// Quick effect (filter) of one stem; pad 0-3
+PioneerDDJSB2.stemQuickEffectGroup = function(group, pad) {
+    return "[QuickEffectRack1_" + PioneerDDJSB2.stemGroup(group, pad + 1) + "]";
+};
+
+// Stems audible now (bit 0 = stem 1), or the change still waiting for the bar
+PioneerDDJSB2.audibleStemMask = function(group) {
+    const pending = engine.getValue(group, "stem_mask_pending");
+    if (pending >= 0) {
+        return pending;
+    }
+    let mask = 0;
+    for (let stem = 1; stem <= 4; stem++) {
+        if (engine.getValue(PioneerDDJSB2.stemGroup(group, stem), "mute") === 0) {
+            mask |= 1 << (stem - 1);
+        }
+    }
+    return mask;
+};
+
+// Make exactly the stems in mask audible: on the next downbeat
+// (stemsOnBar) or right away
+PioneerDDJSB2.setStemMask = function(group, mask) {
+    if (PioneerDDJSB2.stemsOnBar) {
+        engine.setValue(group, "stem_mask_on_bar", mask);
+    } else {
+        for (let stem = 1; stem <= 4; stem++) {
+            engine.setValue(PioneerDDJSB2.stemGroup(group, stem), "mute", (mask >> (stem - 1)) & 1 ? 0 : 1);
+        }
+    }
+};
+
 PioneerDDJSB2.updateCueLoopPadLeds = function(group) {
     let pad;
     if (PioneerDDJSB2.stemPadsActive(group)) {
+        const pending = engine.getValue(group, "stem_mask_pending");
         for (pad = 0; pad < 4; pad++) {
             const playing = engine.getValue(PioneerDDJSB2.stemGroup(group, pad + 1), "mute") === 0;
-            PioneerDDJSB2.padLedControl(group, PioneerDDJSB2.ledGroups.manualLoop, true, pad, false, playing);
+            let on = playing;
+            // Changing on the next bar: blink
+            if (pending >= 0 && (((pending >> pad) & 1) === 1) !== playing) {
+                on = PioneerDDJSB2.blinkOn;
+            }
+            PioneerDDJSB2.padLedControl(group, PioneerDDJSB2.ledGroups.manualLoop, true, pad, false, on);
             PioneerDDJSB2.padLedControl(group, PioneerDDJSB2.ledGroups.manualLoop, true, pad, true,
                 PioneerDDJSB2.soloedStem[group] === pad + 1);
         }
@@ -1307,17 +1424,12 @@ PioneerDDJSB2.updateCueLoopPadLeds = function(group) {
 };
 
 PioneerDDJSB2.soloStem = function(group, stemNumber) {
-    let stem;
     if (PioneerDDJSB2.soloedStem[group] === stemNumber) {
         // Second press: everything back on
-        for (stem = 1; stem <= 4; stem++) {
-            engine.setValue(PioneerDDJSB2.stemGroup(group, stem), "mute", 0);
-        }
+        PioneerDDJSB2.setStemMask(group, 0xF);
         PioneerDDJSB2.soloedStem[group] = 0;
     } else {
-        for (stem = 1; stem <= 4; stem++) {
-            engine.setValue(PioneerDDJSB2.stemGroup(group, stem), "mute", stem === stemNumber ? 0 : 1);
-        }
+        PioneerDDJSB2.setStemMask(group, 1 << (stemNumber - 1));
         PioneerDDJSB2.soloedStem[group] = stemNumber;
     }
     PioneerDDJSB2.updateCueLoopPadLeds(group);
@@ -1330,23 +1442,34 @@ PioneerDDJSB2.cueLoopPad = function(channel, control, value, status, group) {
     const shifted = (control & 0x08) !== 0;
 
     if (PioneerDDJSB2.stemPadsActive(deckGroup)) {
-        if (value === 0) {
+        // Mute acts on release: holding a pad and turning FILTER filters that
+        // stem instead. Releases are matched by pad, because the controller
+        // sends them on the SHIFT layer if SHIFT went down meanwhile.
+        if (!value) {
+            if (PioneerDDJSB2.heldStemPad[deckGroup] !== pad) {
+                return;
+            }
+            delete PioneerDDJSB2.heldStemPad[deckGroup];
+            if (!PioneerDDJSB2.heldStemTurned[deckGroup]) {
+                PioneerDDJSB2.setStemMask(deckGroup,
+                    PioneerDDJSB2.audibleStemMask(deckGroup) ^ (1 << pad));
+                PioneerDDJSB2.soloedStem[deckGroup] = 0;
+            }
             return;
         }
         if (shifted) {
             PioneerDDJSB2.soloStem(deckGroup, pad + 1);
         } else {
-            const stemGroup = PioneerDDJSB2.stemGroup(deckGroup, pad + 1);
-            script.toggleControl(stemGroup, "mute");
-            PioneerDDJSB2.soloedStem[deckGroup] = 0;
+            PioneerDDJSB2.heldStemPad[deckGroup] = pad;
+            PioneerDDJSB2.heldStemTurned[deckGroup] = false;
         }
         return;
     }
 
     // Original behaviour without stems
     if (shifted) {
-        // Deck 1 browses effect unit 1, the other decks effect unit 2
-        const unit = (status & 0x0F) === 0x07 ? 1 : 2;
+        // Like the knobs: decks 1/3 use effect unit 1, decks 2/4 unit 2
+        const unit = PioneerDDJSB2.channelGroups[deckGroup] % 2 === 0 ? 1 : 2;
         const keys = ["prev_chain", "next_chain"];
         if (pad < 2) {
             engine.setValue("[EffectRack1_EffectUnit" + unit + "]", keys[pad], value ? 1 : 0);
@@ -1380,27 +1503,177 @@ PioneerDDJSB2.bankPad = function(channel, control, value, status, group) {
     script.triggerControl(deckGroup, keys[pad]);
 };
 
-PioneerDDJSB2.updateBankPadLeds = function(group) {
-    if (!PioneerDDJSB2.phraseBankPads) {
+// Send a pad LED only when it changes (some inputs update many times a second)
+PioneerDDJSB2.padLedCached = function(group, groupNumber, shiftGroup, pad, shift, on) {
+    const key = group + groupNumber + shiftGroup + pad + shift;
+    on = !!on;
+    if (PioneerDDJSB2.ledCache[key] === on) {
         return;
     }
-    const loaded = engine.getValue(group, "structure_loaded") > 0;
-    const until = engine.getValue(group, "beats_until_phrase");
-    const beat = engine.getValue(group, "beat_distance");
-    // Blink pad 4 on every half beat during the last bar before a new phrase
-    const countdown = loaded && until > 0 && until <= 4;
-    const blinkOn = countdown ? beat < 0.5 : loaded;
-    // beat_distance changes many times per second: only send MIDI on changes
-    const state = (loaded ? "1" : "0") + (blinkOn ? "1" : "0");
-    if (PioneerDDJSB2.bankLedState[group] === state) {
-        return;
-    }
-    PioneerDDJSB2.bankLedState[group] = state;
-    for (let pad = 0; pad < 3; pad++) {
-        PioneerDDJSB2.padLedControl(group, PioneerDDJSB2.ledGroups.sampler, true, pad, false, loaded);
-    }
-    PioneerDDJSB2.padLedControl(group, PioneerDDJSB2.ledGroups.sampler, true, 3, false, blinkOn);
+    PioneerDDJSB2.ledCache[key] = on;
+    PioneerDDJSB2.padLedControl(group, groupNumber, shiftGroup, pad, shift, on);
 };
+
+// BANK pads: lit when the track has structure. In the last 4 bars before a
+// new phrase they count down (4 pads, 3, 2, then pad 1 blinks on the beat).
+PioneerDDJSB2.updateBankPadLeds = function(group) {
+    const loaded = engine.getValue(group, "structure_loaded") > 0;
+    if (PioneerDDJSB2.phraseBankPads) {
+        const until = engine.getValue(group, "beats_until_phrase");
+        const beatsPerBar = 4;
+        const barsLeft = Math.ceil(until / beatsPerBar);
+        const countdown = loaded && until > 0 && barsLeft <= 4;
+        for (let pad = 0; pad < 4; pad++) {
+            let on = loaded;
+            if (countdown) {
+                on = pad < barsLeft;
+                if (barsLeft === 1 && pad === 0) {
+                    on = engine.getValue(group, "beat_distance") < 0.5;
+                }
+            }
+            PioneerDDJSB2.padLedCached(group, PioneerDDJSB2.ledGroups.sampler, true, pad, false, on);
+        }
+    }
+    if (PioneerDDJSB2.performancePads) {
+        // SHIFT + BANK: phrase sync / start on phrase (blinks while waiting) /
+        // phrase restart / phrase loop
+        const armed = engine.getValue(group, "play_on_phrase") > 0;
+        for (let pad = 0; pad < 4; pad++) {
+            const on = pad === 1 && armed ? PioneerDDJSB2.blinkOn : loaded;
+            PioneerDDJSB2.padLedCached(group, PioneerDDJSB2.ledGroups.sampler, true, pad, true, on);
+        }
+    }
+};
+
+// MANUAL LOOP pads (bar loops): lit = that loop is on.
+// SHIFT layer (slicer): the pad of the beat that's playing.
+PioneerDDJSB2.updateBarLoopLeds = function(group) {
+    if (!PioneerDDJSB2.performancePads) {
+        return;
+    }
+    const looping = engine.getValue(group, "loop_enabled") > 0;
+    const bars = looping ? PioneerDDJSB2.activeBarLoop[group] : 0;
+    [1, 2, 4, 8].forEach(function(length, pad) {
+        PioneerDDJSB2.padLedCached(group, PioneerDDJSB2.ledGroups.manualLoop, false, pad, false,
+            bars === length);
+    });
+    const beat = engine.getValue(group, "beat_in_bar");
+    for (let pad = 0; pad < 4; pad++) {
+        PioneerDDJSB2.padLedCached(group, PioneerDDJSB2.ledGroups.manualLoop, false, pad, true,
+            beat === pad + 1);
+    }
+};
+
+// MANUAL LOOP mode pads 0x20-0x23 and SHIFT 0x28-0x2B
+PioneerDDJSB2.manualLoopPad = function(channel, control, value, status, group) {
+    const pad = control & 0x03;
+    const shifted = (control & 0x08) !== 0;
+    const hasStructure = engine.getValue(group, "structure_loaded") > 0;
+    if (!PioneerDDJSB2.performancePads) {
+        const classic = shifted
+            ? [PioneerDDJSB2.loopMoveBackButton, PioneerDDJSB2.loopMoveForwardButton, null,
+                PioneerDDJSB2.loopDoubleButton]
+            : [PioneerDDJSB2.loopInButton, PioneerDDJSB2.loopOutButton, PioneerDDJSB2.loopExitButton,
+                PioneerDDJSB2.loopHalveButton];
+        if (classic[pad]) {
+            classic[pad](channel, control, value, status, group);
+        }
+        return;
+    }
+    // SLICER pads held on this deck: pad -> true. Releases are matched by pad
+    // (they arrive on the plain layer if SHIFT was let go first).
+    const slices = PioneerDDJSB2.slicerHeld[group] = PioneerDDJSB2.slicerHeld[group] || {};
+    if (!value) {
+        if (slices[pad]) {
+            delete slices[pad];
+            if (Object.keys(slices).length === 0) {
+                // slip mode: carry on where the track would have been
+                engine.setValue(group, "slip_enabled", 0);
+            }
+        }
+        return;
+    }
+    if (!shifted) {
+        // BAR LOOPS: 1, 2, 4, 8 bars from the downbeat; the same pad again ends it
+        const bars = [1, 2, 4, 8][pad];
+        // (the engine applies the change after this returns: decide from the old state)
+        const ending = PioneerDDJSB2.activeBarLoop[group] === bars &&
+            engine.getValue(group, "loop_enabled") > 0;
+        if (hasStructure) {
+            engine.setValue(group, "bar_loop", bars);
+        } else {
+            // No bar data: a normal beat loop of that length
+            script.toggleControl(group, "beatloop_" + (bars * 4) + "_toggle");
+        }
+        PioneerDDJSB2.activeBarLoop[group] = ending ? 0 : bars;
+        PioneerDDJSB2.updateBarLoopLeds(group);
+        return;
+    }
+    // SLICER: play from beat N of this bar while held
+    const beat = engine.getValue(group, "beat_in_bar");
+    if (!hasStructure || beat === 0) {
+        return;
+    }
+    if (Object.keys(slices).length === 0) {
+        engine.setValue(group, "slip_enabled", 1);
+    }
+    slices[pad] = true;
+    const delta = (pad + 1) - beat;
+    if (delta !== 0) {
+        engine.setValue(group, "beatjump", delta);
+    }
+};
+
+// SHIFT + BANK pads 0x78-0x7B
+PioneerDDJSB2.shiftBankPad = function(channel, control, value, status, group) {
+    const pad = control & 0x03;
+    if (!PioneerDDJSB2.performancePads) {
+        // Classic: eject sampler 1-4
+        engine.setValue("[Sampler" + (pad + 1) + "]", "eject", value ? 1 : 0);
+        return;
+    }
+    if (!value) {
+        return;
+    }
+    switch (pad) {
+    case 0:
+        script.triggerControl(group, "phrase_sync");
+        break;
+    case 1:
+        script.toggleControl(group, "play_on_phrase");
+        break;
+    case 2:
+        script.triggerControl(group, "phrase_restart");
+        break;
+    case 3:
+        script.triggerControl(group, "phrase_loop");
+        break;
+    }
+    PioneerDDJSB2.updateBankPadLeds(group);
+};
+
+// Every 125 ms: LEDs that blink
+PioneerDDJSB2.blinkTick = function() {
+    PioneerDDJSB2.blinkOn = !PioneerDDJSB2.blinkOn;
+    for (let deck = 1; deck <= 4; deck++) {
+        const group = "[Channel" + deck + "]";
+        // PLAY blinks while the brake (or spin-up) runs
+        if (engine.getValue(group, "brake_active") > 0) {
+            PioneerDDJSB2.nonPadLedControl(group, PioneerDDJSB2.nonPadLeds.play, PioneerDDJSB2.blinkOn);
+            PioneerDDJSB2.braking[group] = true;
+        } else if (PioneerDDJSB2.braking[group]) {
+            PioneerDDJSB2.braking[group] = false;
+            PioneerDDJSB2.deck[deck].playButton.trigger(); // back to the play state
+        }
+        if (engine.getValue(group, "stem_mask_pending") >= 0) {
+            PioneerDDJSB2.updateCueLoopPadLeds(group);
+        }
+        if (engine.getValue(group, "play_on_phrase") > 0) {
+            PioneerDDJSB2.updateBankPadLeds(group);
+        }
+    }
+};
+PioneerDDJSB2.braking = {};
 
 PioneerDDJSB2.initStemsAndPhrases = function(group) {
     if (PioneerDDJSB2.stemConnections[group]) {
@@ -1418,14 +1691,30 @@ PioneerDDJSB2.initStemsAndPhrases = function(group) {
         if (conn) {
             connections.push(conn);
         }
+        // Stem filters (hold stem pad + FILTER) pick up without jumps
+        engine.softTakeover(PioneerDDJSB2.stemQuickEffectGroup(group, stem - 1), "super1", true);
     }
-    // The brake ends with play = 0
-    connections.push(engine.makeConnection(group, "play", function(value) {
-        if (value === 0) {
-            PioneerDDJSB2.braking[PioneerDDJSB2.deckNumber(group)] = false;
+    const stemPending = engine.makeConnection(group, "stem_mask_pending", function() {
+        PioneerDDJSB2.updateCueLoopPadLeds(group);
+    });
+    if (stemPending) {
+        connections.push(stemPending);
+    }
+    ["beat_in_bar", "loop_enabled"].forEach(function(key) {
+        const conn = engine.makeConnection(group, key, function() {
+            PioneerDDJSB2.updateBarLoopLeds(group);
+        });
+        if (conn) {
+            connections.push(conn);
         }
-    }));
-    ["structure_loaded", "beats_until_phrase", "beat_distance"].forEach(function(key) {
+    });
+    if (PioneerDDJSB2.brakeSeconds !== null) {
+        engine.setValue(group, "brake_time", PioneerDDJSB2.brakeSeconds);
+    }
+    if (PioneerDDJSB2.softStartSeconds !== null) {
+        engine.setValue(group, "softstart_time", PioneerDDJSB2.softStartSeconds);
+    }
+    ["structure_loaded", "beats_until_phrase", "beat_distance", "play_on_phrase"].forEach(function(key) {
         const conn = engine.makeConnection(group, key, function() {
             PioneerDDJSB2.updateBankPadLeds(group);
         });
@@ -1436,4 +1725,5 @@ PioneerDDJSB2.initStemsAndPhrases = function(group) {
     PioneerDDJSB2.stemConnections[group] = connections;
     PioneerDDJSB2.updateCueLoopPadLeds(group);
     PioneerDDJSB2.updateBankPadLeds(group);
+    PioneerDDJSB2.updateBarLoopLeds(group);
 };

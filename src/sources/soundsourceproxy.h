@@ -64,6 +64,16 @@ class SoundSourceProxy {
 
     explicit SoundSourceProxy(TrackPointer pTrack);
 
+    /// Opens the track's audio for playback and analysis. If stemprep made a
+    /// stem file for the track that still fits it (see
+    /// mixxx::TrackStructure::stemCacheFor()), that file is decoded instead,
+    /// so an ordinary track plays with stems; if it can't be opened, the
+    /// track's own file is. (Tags and cover art always come from the
+    /// track's own file.)
+    static mixxx::AudioSourcePointer openAudioSourceForDecoding(
+            const TrackPointer& pTrack,
+            const mixxx::AudioSource::OpenParams& params);
+
     // Only needed for testing all available providers explicitly
     SoundSourceProxy(
             TrackPointer pTrack,
@@ -212,12 +222,19 @@ class SoundSourceProxy {
     // for writing metadata immediately before the TIO is destroyed.
     explicit SoundSourceProxy(const QUrl& url);
 
+    // Decodes stemCacheLocation instead of the track's file, see forDecoding()
+    SoundSourceProxy(TrackPointer pTrack, const QString& stemCacheLocation);
+
     bool openSoundSource(
             const mixxx::AudioSource::OpenParams& params = mixxx::AudioSource::OpenParams());
 
     const TrackPointer m_pTrack;
 
     const QUrl m_url;
+
+    // Set when a stem file made for the track is decoded instead of the
+    // track's own file (m_url then points to it), see forDecoding()
+    const QString m_stemCacheLocation;
 
     const QList<mixxx::SoundSourceProviderRegistration> m_providerRegistrations;
 

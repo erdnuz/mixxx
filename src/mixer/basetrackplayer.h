@@ -76,6 +76,8 @@ class BaseTrackPlayer : public BasePlayer {
     void trackMenuChangeRequest(bool show);
 };
 
+class BarControl;
+class BrakeControl;
 class PhraseControl;
 
 class BaseTrackPlayerImpl : public BaseTrackPlayer {
@@ -153,9 +155,13 @@ class BaseTrackPlayerImpl : public BaseTrackPlayer {
     void slotShiftCuesMillis(double milliseconds);
     void slotShiftCuesMillisButton(double value, double milliseconds);
     void slotUpdateReplayGainFromPregain(double pressed);
+    /// Reload the (stopped) track to play the stems stemprep made for it,
+    /// keeping position, tempo, pitch and stem levels.
+    void slotReloadForNewStems();
 
   private:
     void setReplayGain(double value);
+    void restoreStateAfterStemsReload();
 
     void loadTrack(TrackPointer pTrack);
     TrackPointer unloadTrack();
@@ -198,6 +204,20 @@ class BaseTrackPlayerImpl : public BaseTrackPlayer {
 
     // Bars/phrases/sections of the loaded track (structure sidecar files)
     parented_ptr<PhraseControl> m_pPhraseControl;
+    // Deck state saved when the track is reloaded to switch to new stems
+    struct StemsReloadState {
+        TrackPointer pTrack;
+        double playPosition;
+        double rateRatio;
+        double pitchAdjust;
+        double stemVolume[mixxx::kMaxSupportedStems];
+        double stemMute[mixxx::kMaxSupportedStems];
+    };
+    std::unique_ptr<StemsReloadState> m_pStemsReloadState;
+    // Turntable brake / spin-up
+    parented_ptr<BrakeControl> m_pBrakeControl;
+    // Bar/phrase sync, on-the-bar stem changes, bar loops
+    parented_ptr<BarControl> m_pBarControl;
 
     // Waveform display related controls
     std::unique_ptr<ControlObject> m_pWaveformZoom;

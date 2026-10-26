@@ -165,6 +165,7 @@ TEST(TrackStructureTest, HandlesDoubleTempoGrid) {
     auto pBeats = makeGrid(kBpm * 2);
     auto pAlignment = pStructure->computeAlignment(*pBeats);
     EXPECT_EQ(8, pAlignment->beatsPerBar);
+    EXPECT_EQ(64, pAlignment->phraseBeats); // 8 bars of 8 grid beats
     EXPECT_GT(pAlignment->confidence, 0.9);
     const int firstDownbeat = beatIndexAtSeconds(*pBeats, kFirstDownbeat);
     EXPECT_TRUE(pAlignment->isBarStart(firstDownbeat));
@@ -191,4 +192,113 @@ TEST(TrackStructureTest, SidecarRoundTrip) {
     ASSERT_TRUE(pStructure);
     EXPECT_TRUE(pStructure->cuesApplied());
     EXPECT_EQ(4, pStructure->sections().size());
+}
+
+TEST(TrackStructureTest, BarAndPhrasePositions) {
+    TrackStructure::Alignment a;
+    a.beatsPerBar = 4;
+    a.phraseBeats = 32;
+    a.barPhase = 1;
+    // phrases every 8 bars from beat 1, plus a section starting mid-phrase
+    a.phraseStartBeats = {1, 33, 65, 81};
+
+    EXPECT_EQ(1, a.beatInBar(1));
+    EXPECT_EQ(4, a.beatInBar(4));
+    EXPECT_EQ(1, a.beatInBar(5));
+    EXPECT_EQ(4, a.beatInBar(0));
+    EXPECT_EQ(4, a.beatsUntilBar(1));
+    EXPECT_EQ(1, a.beatsUntilBar(4));
+
+    EXPECT_EQ(33, a.phraseStartAtOrBefore(40));
+    EXPECT_EQ(65, a.phraseStartAtOrBefore(80));
+    EXPECT_EQ(81, a.phraseStartAtOrBefore(85));
+    EXPECT_EQ(81, a.phraseStartAtOrBefore(100));
+    EXPECT_EQ(-31, a.phraseStartAtOrBefore(0)); // before the first phrase
+    EXPECT_EQ(7, a.positionInPhrase(40));
+    EXPECT_EQ(33, a.nextPhraseStart(1));
+    EXPECT_EQ(81, a.nextPhraseStart(70));
+    EXPECT_EQ(113, a.nextPhraseStart(100)); // after the last: whole phrases on
+
+    // Without phrase data: phrases counted from the bar phase
+    TrackStructure::Alignment noPhrases = a;
+    noPhrases.phraseStartBeats.clear();
+    EXPECT_EQ(33, noPhrases.phraseStartAtOrBefore(40));
+    EXPECT_EQ(65, noPhrases.nextPhraseStart(40));
+
+    // Smallest move to line up phrase positions
+    EXPECT_EQ(-4, TrackStructure::Alignment::syncDelta(5, 1, 32));
+    EXPECT_EQ(4, TrackStructure::Alignment::syncDelta(30, 2, 32));
+    EXPECT_EQ(16, TrackStructure::Alignment::syncDelta(0, 16, 32));
+    EXPECT_EQ(0, TrackStructure::Alignment::syncDelta(3, 3, 32));
+    EXPECT_EQ(-1, TrackStructure::Alignment::syncDelta(2, 1, 4)); // bars only
+}
+
+TEST(TrackStructureTest, Tier) {
+    auto pStructure = TrackStructure::fromJson(makeJson());
+    ASSERT_TRUE(pStructure);
+    EXPECT_TRUE(pStructure->analyzedFromStems()); // files without a tier
+    QJsonObject root = QJsonDocument::fromJson(makeJson()).object();
+    root.insert("tier", "mix");
+    pStructure = TrackStructure::fromJson(QJsonDocument(root).toJson());
+    ASSERT_TRUE(pStructure);
+    EXPECT_FALSE(pStructure->analyzedFromStems());
+}
+
+TEST(TrackStructureTest, StemCache) {
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const auto writeFile = [](const QString& path, const QByteArray& data) {
+        QFile file(path);
+        ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+        file.write(data);
+    };
+    const QString track = dir.filePath("Artist - Song.mp3");
+    const QString stems = dir.filePath("Artist - Song.stem.mp4");
+    writeFile(track, QByteArray(1000, 'x'));
+    writeFile(stems, QByteArray(10, 'y'));
+    const auto writeSidecar = [&](const QJsonObject& extra) {
+        QJsonObject root = QJsonDocument::fromJson(makeJson()).object();
+        root.insert("stems", stems);
+        root.insert("source_size", 1000);
+        root.insert("stems_offset_ms", 0.4);
+        root.insert("stems_sample_rate", 44100);
+        for (auto it = extra.begin(); it != extra.end(); ++it) {
+            root.insert(it.key(), it.value());
+        }
+        writeFile(TrackStructure::sidecarPath(track), QJsonDocument(root).toJson());
+    };
+    const auto sampleRate = audio::SampleRate(44100);
+
+    EXPECT_TRUE(TrackStructure::stemCacheFor(track, sampleRate).isEmpty()); // no sidecar
+
+    writeSidecar({});
+    EXPECT_EQ(stems, TrackStructure::stemCacheFor(track, sampleRate));
+
+    // Beats and cues are in frames: the sample rate must match
+    EXPECT_TRUE(TrackStructure::stemCacheFor(track, audio::SampleRate(48000)).isEmpty());
+    EXPECT_TRUE(TrackStructure::stemCacheFor(track, audio::SampleRate()).isEmpty());
+
+    // Out of sync
+    writeSidecar({{"stems_offset_ms", -12.0}});
+    EXPECT_TRUE(TrackStructure::stemCacheFor(track, sampleRate).isEmpty());
+    writeSidecar({{"stems_offset_ms", QJsonValue()}});
+    EXPECT_TRUE(TrackStructure::stemCacheFor(track, sampleRate).isEmpty());
+
+    // Made from an older version of the file
+    writeSidecar({{"source_size", 999}});
+    EXPECT_TRUE(TrackStructure::stemCacheFor(track, sampleRate).isEmpty());
+
+    // Stem file deleted
+    writeSidecar({});
+    ASSERT_TRUE(QFile::remove(stems));
+    EXPECT_TRUE(TrackStructure::stemCacheFor(track, sampleRate).isEmpty());
+
+    // A stem file's own sidecar points at itself: nothing to substitute
+    writeFile(stems, QByteArray(10, 'y'));
+    writeFile(TrackStructure::sidecarPath(stems),
+            QJsonDocument::fromJson(QStringLiteral("{\"stems\": \"%1\"}")
+                                            .arg(stems)
+                                            .toUtf8())
+                    .toJson());
+    EXPECT_TRUE(TrackStructure::stemCacheFor(stems, sampleRate).isEmpty());
 }

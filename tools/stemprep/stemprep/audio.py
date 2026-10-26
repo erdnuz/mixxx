@@ -39,16 +39,22 @@ def find_ffprobe() -> Optional[str]:
     return shutil.which("ffprobe")
 
 
-def decode(path: Path, sample_rate: int = SAMPLE_RATE) -> np.ndarray:
-    """Decode any audio file to float32 stereo, shape (2, n)."""
+def decode(path: Path, sample_rate: int = SAMPLE_RATE, channels: int = 2,
+           max_seconds: Optional[float] = None) -> np.ndarray:
+    """Decode any audio file to float32, shape (channels, n). Analysis that
+    only needs mono at a low rate (beats, sections) is much cheaper with
+    channels=1, sample_rate=22050."""
     cmd = [find_ffmpeg(), "-v", "error", "-nostdin", "-i", str(path),
            "-map", "0:a:0", "-f", "f32le", "-acodec", "pcm_f32le",
-           "-ac", "2", "-ar", str(sample_rate), "-"]
+           "-ac", str(channels), "-ar", str(sample_rate)]
+    if max_seconds:
+        cmd += ["-t", str(max_seconds)]
+    cmd += ["-"]
     proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     if proc.returncode != 0:
         raise RuntimeError(f"ffmpeg could not decode {path}: {proc.stderr.decode(errors='replace')}")
     data = np.frombuffer(proc.stdout, dtype=np.float32)
-    return data.reshape(-1, 2).T.copy()
+    return data.reshape(-1, channels).T.copy()
 
 
 def probe_tags(path: Path) -> dict:
@@ -63,6 +69,15 @@ def probe_tags(path: Path) -> dict:
         return json.loads(proc.stdout).get("format", {}).get("tags", {})
     except json.JSONDecodeError:
         return {}
+
+
+def read_wav(path: Path) -> np.ndarray:
+    """Read a 32-bit float WAV as written by write_wav(): shape (channels, n)."""
+    import struct
+
+    data = Path(path).read_bytes()
+    channels = struct.unpack("<H", data[22:24])[0]
+    return np.frombuffer(data[44:], dtype=np.float32).reshape(-1, channels).T.copy()
 
 
 def write_wav(path: Path, audio: np.ndarray, sample_rate: int = SAMPLE_RATE) -> None:

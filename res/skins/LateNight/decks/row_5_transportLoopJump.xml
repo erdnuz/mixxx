@@ -371,6 +371,29 @@
           </WidgetGroup><!-- /Jump buttons + beatjump size spinbox -->
 
           <WidgetGroup><Size>2f,0min</Size></WidgetGroup>
+          <WidgetGroup><SizePolicy>i,min</SizePolicy><MaximumSize>8,</MaximumSize></WidgetGroup>
+
+          <WidgetGroup><!-- Turntable brake: lit while braking or spinning back up -->
+            <ObjectName>AlignLeftTop</ObjectName>
+            <Layout>vertical</Layout>
+            <SizePolicy>max,min</SizePolicy>
+            <Children>
+              <Template src="skins:LateNight/controls/button_2state_right_display.xml">
+                <SetVariable name="TooltipId">brake</SetVariable>
+                <SetVariable name="ObjectName">Brake</SetVariable>
+                <SetVariable name="Size">52f,26f</SetVariable>
+                <SetVariable name="BtnSize">medium</SetVariable>
+                <SetVariable name="state_0_text">BRAKE</SetVariable>
+                <SetVariable name="state_1_text">BRAKE</SetVariable>
+                <SetVariable name="Align">center</SetVariable>
+                <SetVariable name="ConfigKey"><Variable name="Group"/>,brake</SetVariable>
+                <SetVariable name="ConfigKeyRight"><Variable name="Group"/>,brake</SetVariable>
+                <SetVariable name="ConfigKeyDisp"><Variable name="Group"/>,brake_active</SetVariable>
+              </Template>
+            </Children>
+          </WidgetGroup><!-- /Brake -->
+
+          <WidgetGroup><Size>2f,0min</Size></WidgetGroup>
           <WidgetGroup><SizePolicy>i,min</SizePolicy></WidgetGroup>
         </Children>
       </WidgetGroup><!-- DeckRow_5_LoopCuesTransport -->

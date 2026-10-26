@@ -570,7 +570,9 @@ class Track : public QObject {
     /// Imports pending stem info from a stemInfoImporter and returns a boolean to
     /// indicate if stems were updated. Only supposed to be called while the
     /// caller guards this a lock.
-    bool importPendingStemInfosWhileLocked();
+    /// stemFileLocation: the file with the stem manifest (the track's own
+    /// file, or a stem file made for it, see SoundSourceProxy::forDecoding()).
+    bool importPendingStemInfosWhileLocked(const QString& stemFileLocation);
 #endif
 
     mixxx::Bpm getBpmWhileLocked() const;
@@ -605,8 +607,11 @@ class Track : public QObject {
     ExportTrackMetadataResult exportMetadata(
             const mixxx::MetadataSource& metadataSource,
             const SyncTrackMetadataParams& syncParams);
+    /// stemCacheLocation: set if a stem file made for this track was decoded
+    /// instead of the track's own file; stem names/colors are read from it.
     void updateStreamInfoFromSource(
-            mixxx::audio::StreamInfo&& streamInfo);
+            mixxx::audio::StreamInfo&& streamInfo,
+            const QString& stemCacheLocation = QString());
 
     // Mutex protecting access to object
     mutable QT_RECURSIVE_MUTEX m_qMutex;

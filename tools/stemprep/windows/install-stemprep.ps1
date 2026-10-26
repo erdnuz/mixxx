@@ -71,8 +71,8 @@ if (-not $ff -and -not (Test-Path (Join-Path $HOME ".spotdl\ffmpeg.exe"))) {
 }
 
 # 6. Download the AI models now so the first run doesn't stall -------------
-Say "Downloading the AI models (one time, ~350 MB)"
-& $vpy -c "from stemprep.ml import load_models; load_models(True, 'cpu', 'htdemucs'); print('models ready')"
+Say "Downloading the AI models (one time, ~500 MB)"
+& $vpy -c "from stemprep.ml import load_models, SpleeterSeparator; load_models(True, 'cpu', 'htdemucs'); SpleeterSeparator(); print('models ready')"
 
 # 7. Desktop shortcut ---------------------------------------------------------
 Say "Creating Desktop shortcut"

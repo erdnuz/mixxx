@@ -551,6 +551,11 @@ void Tooltips::addStandardTooltips() {
             << QString("%1: %2").arg(rightClick, tr("Puts a track into reverse while being held (Censor)."))
             << tr("Playback continues where the track would have been if it had not been temporarily reversed.");
 
+    add("brake")
+            << tr("Brake")
+            << tr("Slows the playing track down to a stop, like switching off a turntable.")
+            << tr("Press again while stopped or braking to spin back up to normal speed.");
+
     // Currently used for samplers
     add("play_start")
             << tr("Play/Pause")

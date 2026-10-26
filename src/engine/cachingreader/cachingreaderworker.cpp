@@ -219,7 +219,8 @@ void CachingReaderWorker::loadTrack(const TrackPointer& pTrack) {
 #ifdef __STEM__
     config.setStemMask(stemMask);
 #endif
-    m_pAudioSource = SoundSourceProxy(pTrack).openAudioSource(config);
+    // Plays with stems if stemprep made a stem file for this track
+    m_pAudioSource = SoundSourceProxy::openAudioSourceForDecoding(pTrack, config);
     if (!m_pAudioSource) {
         kLogger.warning()
                 << m_group

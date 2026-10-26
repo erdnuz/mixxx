@@ -1446,7 +1446,9 @@ add_library(
   src/library/treeitemmodel.cpp
   src/mixer/auxiliary.cpp
   src/mixer/baseplayer.cpp
+  src/mixer/barcontrol.cpp
   src/mixer/basetrackplayer.cpp
+  src/mixer/brakecontrol.cpp
   src/mixer/deck.cpp
   src/mixer/microphone.cpp
   src/mixer/phrasecontrol.cpp
@@ -1455,6 +1457,7 @@ add_library(
   src/mixer/previewdeck.cpp
   src/mixer/sampler.cpp
   src/mixer/samplerbank.cpp
+  src/mixer/stemprepqueue.cpp
   src/mixxxapplication.cpp
   src/mixxxmainwindow.cpp
   src/musicbrainz/chromaprinter.cpp
@@ -2811,6 +2814,7 @@ if(BUILD_TESTING)
     src/test/tracknumberstest.cpp
     src/test/trackreftest.cpp
     src/test/trackstructuretest.cpp
+    src/test/brakecontroltest.cpp
     src/test/trackupdate_test.cpp
     src/test/uuid_test.cpp
     src/test/wbatterytest.cpp

@@ -1,10 +1,12 @@
 #include "mixer/phrasecontrol.h"
 
+#include <QFileInfo>
 #include <cmath>
 
 #include "control/controlobject.h"
 #include "control/controlproxy.h"
 #include "control/controlpushbutton.h"
+#include "mixer/stemprepqueue.h"
 #include "moc_phrasecontrol.cpp"
 #include "track/track.h"
 #include "track/trackstructure.h"
@@ -18,6 +20,7 @@ const mixxx::Logger kLogger("PhraseControl");
 
 const QString kConfigGroup = QStringLiteral("[Structure]");
 const QString kAutoHotcuesKey = QStringLiteral("AutoHotcues");
+const QString kAutoReloadStemsKey = QStringLiteral("AutoReloadStems");
 // Only fill the first 8 hot cues: that's what fits on most controllers.
 constexpr int kMaxAutoHotcueSlots = 8;
 
@@ -40,6 +43,14 @@ PhraseControl::PhraseControl(const QString& group,
             ConfigKey(group, QStringLiteral("section_index")));
     m_pSectionIndex->setReadOnly();
     m_pSectionIndex->forceSet(-1);
+    m_pStemsReadyOnReload = std::make_unique<ControlObject>(
+            ConfigKey(group, QStringLiteral("stems_ready_on_reload")));
+    m_pStemsReadyOnReload->setReadOnly();
+
+    connect(&m_watcher,
+            &QFileSystemWatcher::directoryChanged,
+            this,
+            &PhraseControl::slotTrackDirectoryChanged);
 
     m_pReload = std::make_unique<ControlPushButton>(
             ConfigKey(group, QStringLiteral("structure_reload")));
@@ -73,6 +84,8 @@ PhraseControl::PhraseControl(const QString& group,
 
     m_pPlayPosition = make_parented<ControlProxy>(group, QStringLiteral("playposition"), this);
     m_pPlayPosition->connectValueChanged(this, &PhraseControl::slotPositionChanged);
+    m_pPlay = make_parented<ControlProxy>(group, QStringLiteral("play"), this);
+    m_pPlay->connectValueChanged(this, &PhraseControl::slotPlayChanged);
     m_pTrackSamples = make_parented<ControlProxy>(group, QStringLiteral("track_samples"), this);
     m_pBeatJump = make_parented<ControlProxy>(group, QStringLiteral("beatjump"), this);
 }
@@ -96,8 +109,84 @@ void PhraseControl::trackLoaded(TrackPointer pTrack) {
                 &PhraseControl::slotStructureOrBeatsChanged);
         // Pick up files written by stemprep since the track was last loaded.
         m_pTrack->reloadStructure();
+        // The reader has just opened the track the same way
+        m_loadedStemCache = mixxx::TrackStructure::stemCacheFor(
+                m_pTrack->getLocation(), m_pTrack->getSampleRate());
+        if (isDeck()) {
+            StemprepQueue::request(
+                    m_pTrack->getLocation(), StemprepQueue::kPriorityDeck, m_pConfig);
+        }
+    } else {
+        m_loadedStemCache.clear();
     }
+    m_reloadWhenStopped = false;
+    watchSidecar();
+    updateStemsReady();
     slotStructureOrBeatsChanged();
+}
+
+bool PhraseControl::isDeck() const {
+    return m_group.startsWith(QStringLiteral("[Channel")); // not samplers or preview
+}
+
+void PhraseControl::watchSidecar() {
+    const QStringList watched = m_watcher.directories();
+    if (!watched.isEmpty()) {
+        m_watcher.removePaths(watched);
+    }
+    m_sidecarModified = QDateTime();
+    if (!m_pTrack || !isDeck()) {
+        return;
+    }
+    const QFileInfo sidecar(mixxx::TrackStructure::sidecarPath(m_pTrack->getLocation()));
+    if (sidecar.exists()) {
+        m_sidecarModified = sidecar.lastModified();
+    }
+    m_watcher.addPath(sidecar.absolutePath());
+}
+
+void PhraseControl::slotTrackDirectoryChanged() {
+    if (!m_pTrack) {
+        return;
+    }
+    // Something in the track's folder changed; only react to the structure file
+    const QFileInfo sidecar(mixxx::TrackStructure::sidecarPath(m_pTrack->getLocation()));
+    const QDateTime modified = sidecar.exists() ? sidecar.lastModified() : QDateTime();
+    if (modified == m_sidecarModified) {
+        return;
+    }
+    m_sidecarModified = modified;
+    m_pTrack->reloadStructure(); // emits structureUpdated() if it changed
+    updateStemsReady();
+}
+
+void PhraseControl::updateStemsReady() {
+    bool ready = false;
+    if (m_pTrack) {
+        const QString stemCache = mixxx::TrackStructure::stemCacheFor(
+                m_pTrack->getLocation(), m_pTrack->getSampleRate());
+        ready = !stemCache.isEmpty() && stemCache != m_loadedStemCache;
+    }
+    m_pStemsReadyOnReload->forceSet(ready ? 1.0 : 0.0);
+    if (!ready || !isDeck() ||
+            !m_pConfig->getValue(ConfigKey(kConfigGroup, kAutoReloadStemsKey), true)) {
+        m_reloadWhenStopped = false;
+        return;
+    }
+    // Switching the audio file under a playing deck would interrupt it
+    if (m_pPlay->toBool()) {
+        m_reloadWhenStopped = true;
+    } else {
+        kLogger.info() << m_group << "switching to new stems";
+        emit reloadForNewStems();
+    }
+}
+
+void PhraseControl::slotPlayChanged(double play) {
+    if (play == 0 && m_reloadWhenStopped) {
+        m_reloadWhenStopped = false;
+        updateStemsReady(); // still new? then reload now
+    }
 }
 
 void PhraseControl::slotStructureOrBeatsChanged() {
@@ -220,8 +309,8 @@ void PhraseControl::jump(Target target, int direction) {
 }
 
 void PhraseControl::maybeAddCues(const TrackPointer& pTrack) {
-    if (!m_group.startsWith(QStringLiteral("[Channel"))) {
-        return; // decks only, not samplers or preview
+    if (!isDeck()) {
+        return;
     }
     if (!m_pConfig->getValue(ConfigKey(kConfigGroup, kAutoHotcuesKey), true)) {
         return;
@@ -233,6 +322,11 @@ void PhraseControl::maybeAddCues(const TrackPointer& pTrack) {
     const auto pBeats = pTrack->getBeats();
     if (!pStructure || !pBeats || pStructure->cuesApplied() ||
             pStructure->cueSuggestions().isEmpty()) {
+        return;
+    }
+    if (!pStructure->analyzedFromStems()) {
+        // Sections from the mix only may still move once stems are made;
+        // cues added now would stay in the wrong place.
         return;
     }
     const auto pAlignment = pStructure->alignTo(pBeats);

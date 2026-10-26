@@ -165,20 +165,24 @@ def _to_mono_ds(x: np.ndarray, sr: int) -> np.ndarray:
     return x[idx]
 
 
-def _band_energy_per_bar(
-    x: np.ndarray, bar_starts: Sequence[float], bands: Dict[str, tuple],
-    stat: str = "mean",
-) -> Dict[str, np.ndarray]:
-    """Energy (power) per bar in each frequency band."""
-    n_fft = 2048
-    hop = 512
+BAND_FFT, BAND_HOP = 2048, 512
+FLUX_FFT, FLUX_HOP = 1024, 256
+
+
+def _frame_times(n_frames: int, n_fft: int, hop: int) -> np.ndarray:
+    return (np.arange(n_frames) * hop + n_fft / 2) / ANALYSIS_SR
+
+
+def _band_power_frames(x: np.ndarray, bands: Dict[str, tuple]) -> Dict[str, np.ndarray]:
+    """Power per STFT frame (BAND_HOP) in each frequency band."""
+    n_fft = BAND_FFT
+    hop = BAND_HOP
     if len(x) < n_fft:
         x = np.pad(x, (0, n_fft - len(x)))
     n_frames = 1 + (len(x) - n_fft) // hop
     window = np.hanning(n_fft).astype(np.float32)
     freqs = np.fft.rfftfreq(n_fft, 1.0 / ANALYSIS_SR)
     masks = {k: (freqs >= lo) & (freqs < hi) for k, (lo, hi) in bands.items()}
-    frame_times = (np.arange(n_frames) * hop + n_fft / 2) / ANALYSIS_SR
     per_frame = {k: np.zeros(n_frames, dtype=np.float32) for k in bands}
     chunk = 512
     for s in range(0, n_frames, chunk):
@@ -187,9 +191,7 @@ def _band_energy_per_bar(
         spec = np.abs(np.fft.rfft(x[idx] * window, axis=1)) ** 2
         for k, m in masks.items():
             per_frame[k][s:e] = spec[:, m].sum(axis=1)
-    if stat == "percentiles":
-        return _aggregate_percentiles(per_frame, frame_times, bar_starts)
-    return _aggregate(per_frame, frame_times, bar_starts)
+    return per_frame
 
 
 def _bar_index(frame_times, bar_starts):
@@ -234,11 +236,11 @@ def _aggregate(per_frame, frame_times, bar_starts):
     return out
 
 
-def _spectral_flux_per_bar(x: np.ndarray, bar_starts: Sequence[float]) -> np.ndarray:
-    """Onset density (how busy the drums are) per bar."""
-    n_fft, hop = 1024, 256
+def _spectral_flux_frames(x: np.ndarray) -> np.ndarray:
+    """Onset strength (how busy the drums are) per frame (FLUX_HOP)."""
+    n_fft, hop = FLUX_FFT, FLUX_HOP
     if len(x) < n_fft:
-        return np.zeros(len(bar_starts))
+        return np.zeros(0, dtype=np.float32)
     n_frames = 1 + (len(x) - n_fft) // hop
     window = np.hanning(n_fft).astype(np.float32)
     flux = np.zeros(n_frames, dtype=np.float32)
@@ -255,12 +257,81 @@ def _spectral_flux_per_bar(x: np.ndarray, bar_starts: Sequence[float]) -> np.nda
         d = np.maximum(0.0, np.diff(mag_all, axis=0)).sum(axis=1)
         flux[s:e] = d
         prev = mag[-1]
-    frame_times = (np.arange(n_frames) * hop + n_fft / 2) / ANALYSIS_SR
-    return _aggregate({"f": flux}, frame_times, bar_starts)["f"]
+    return flux
 
 
 def _db(p: np.ndarray) -> np.ndarray:
     return 10.0 * np.log10(np.maximum(p, 1e-10))
+
+
+@dataclass
+class FrameFeatures:
+    """Band power per BAND_HOP frame and drum onset strength per FLUX_HOP
+    frame. This is the expensive part of the analysis and doesn't depend on
+    the bar grid, so it can be cached and re-analyzed after tuning."""
+
+    power: Dict[str, np.ndarray]
+    flux: np.ndarray
+    has_stems: bool
+
+
+def frame_features(
+    sr: int,
+    stems: Optional[Dict[str, np.ndarray]] = None,
+    mix: Optional[np.ndarray] = None,
+) -> FrameFeatures:
+    if stems:
+        drums = _to_mono_ds(stems["drums"], sr)
+        power = _band_power_frames(drums, {
+            "kick": (35.0, 120.0), "drums": (35.0, 5000.0), "hats": (5000.0, 5500.0)})
+        power.update(_band_power_frames(_to_mono_ds(stems["bass"], sr),
+                                        {"bass": (30.0, 300.0)}))
+        power.update(_band_power_frames(_to_mono_ds(stems["other"], sr),
+                                        {"music": (100.0, 5000.0), "bright": (2500.0, 5500.0)}))
+        power.update(_band_power_frames(_to_mono_ds(stems["vocals"], sr),
+                                        {"vocals": (150.0, 5000.0)}))
+        return FrameFeatures(power, _spectral_flux_frames(drums), True)
+    if mix is None:
+        raise ValueError("need stems or mix")
+    m = _to_mono_ds(mix, sr)
+    power = _band_power_frames(m, {
+        "music": (250.0, 4000.0), "hats": (5000.0, 5500.0), "vocals": (300.0, 3400.0),
+        "low": (35.0, 200.0)})
+    return FrameFeatures(power, _spectral_flux_frames(m), False)
+
+
+def bars_from_frames(frames: FrameFeatures, bar_starts: Sequence[float]) -> Dict[str, np.ndarray]:
+    """Per-bar loudness features in dB relative to the track's loud parts."""
+    n_band = len(next(iter(frames.power.values())))
+    band_times = _frame_times(n_band, BAND_FFT, BAND_HOP)
+    flux_times = _frame_times(len(frames.flux), FLUX_FFT, FLUX_HOP)
+    if len(frames.flux):
+        busy = _aggregate({"f": frames.flux}, flux_times, bar_starts)["f"]
+    else:
+        busy = np.zeros(len(bar_starts))
+    if frames.has_stems:
+        p = _aggregate(frames.power, band_times, bar_starts)
+        feats = {k: _db(p[k]) for k in ("kick", "drums", "hats", "bass", "music", "vocals")}
+        feats["bright"] = _db(p["bright"]) - _db(p["music"])
+    else:
+        p = _aggregate({k: frames.power[k] for k in ("music", "hats", "vocals")},
+                       band_times, bar_starts)
+        # Without stems, tell kick from bass by how the low end behaves inside
+        # the bar: a kick is loud peaks with gaps, a bassline fills the gaps.
+        low = _aggregate_percentiles({"low": frames.power["low"]}, band_times, bar_starts)
+        p["kick"] = low["low_p90"]
+        p["bass"] = low["low_p25"]
+        feats = {k: _db(v) for k, v in p.items()}
+        feats["drums"] = np.maximum(feats["kick"], feats["hats"])
+        feats["bright"] = feats["hats"] - feats["music"]
+    feats["busy"] = busy
+
+    # Make levels relative: 0 dB = this track's loud level for that part.
+    for k in ("kick", "drums", "hats", "bass", "music", "vocals"):
+        ref = np.percentile(feats[k], 90)
+        feats[k] = np.clip(feats[k] - ref, -40.0, 6.0)
+    feats["busy"] = feats["busy"] / max(np.percentile(feats["busy"], 90), 1e-6)
+    return feats
 
 
 def bar_features(
@@ -269,48 +340,7 @@ def bar_features(
     stems: Optional[Dict[str, np.ndarray]] = None,
     mix: Optional[np.ndarray] = None,
 ) -> Dict[str, np.ndarray]:
-    """Per-bar loudness features in dB relative to the track's loud parts."""
-    feats: Dict[str, np.ndarray] = {}
-    if stems:
-        drums = _to_mono_ds(stems["drums"], sr)
-        d = _band_energy_per_bar(drums, bar_starts, {
-            "kick": (35.0, 120.0), "drums": (35.0, 5000.0), "hats": (5000.0, 5500.0)})
-        feats["kick"] = _db(d["kick"])
-        feats["drums"] = _db(d["drums"])
-        feats["hats"] = _db(d["hats"])
-        feats["busy"] = _spectral_flux_per_bar(drums, bar_starts)
-        b = _band_energy_per_bar(_to_mono_ds(stems["bass"], sr), bar_starts,
-                                 {"bass": (30.0, 300.0)})
-        feats["bass"] = _db(b["bass"])
-        o = _band_energy_per_bar(_to_mono_ds(stems["other"], sr), bar_starts,
-                                 {"music": (100.0, 5000.0), "bright": (2500.0, 5500.0)})
-        feats["music"] = _db(o["music"])
-        feats["bright"] = _db(o["bright"]) - _db(o["music"])
-        v = _band_energy_per_bar(_to_mono_ds(stems["vocals"], sr), bar_starts,
-                                 {"vocals": (150.0, 5000.0)})
-        feats["vocals"] = _db(v["vocals"])
-    else:
-        if mix is None:
-            raise ValueError("need stems or mix")
-        m = _to_mono_ds(mix, sr)
-        e = _band_energy_per_bar(m, bar_starts, {
-            "music": (250.0, 4000.0), "hats": (5000.0, 5500.0), "vocals": (300.0, 3400.0)})
-        # Without stems, tell kick from bass by how the low end behaves inside
-        # the bar: a kick is loud peaks with gaps, a bassline fills the gaps.
-        low = _band_energy_per_bar(m, bar_starts, {"low": (35.0, 200.0)}, stat="percentiles")
-        e["kick"] = low["low_p90"]
-        e["bass"] = low["low_p25"]
-        feats = {k: _db(v) for k, v in e.items()}
-        feats["drums"] = np.maximum(feats["kick"], feats["hats"])
-        feats["bright"] = feats["hats"] - feats["music"]
-        feats["busy"] = _spectral_flux_per_bar(m, bar_starts)
-
-    # Make levels relative: 0 dB = this track's loud level for that part.
-    for k in ("kick", "drums", "hats", "bass", "music", "vocals"):
-        ref = np.percentile(feats[k], 90)
-        feats[k] = np.clip(feats[k] - ref, -40.0, 6.0)
-    feats["busy"] = feats["busy"] / max(np.percentile(feats["busy"], 90), 1e-6)
-    return feats
+    return bars_from_frames(frame_features(sr, stems=stems, mix=mix), bar_starts)
 
 
 # ---------------------------------------------------------------------------
@@ -530,11 +560,14 @@ def analyze_structure(
     beats: Sequence[float],
     downbeats: Sequence[float],
     duration: float,
-    sr: int,
+    sr: int = 0,
     stems: Optional[Dict[str, np.ndarray]] = None,
     mix: Optional[np.ndarray] = None,
     phrase_bars: int = 8,
+    frames: Optional[FrameFeatures] = None,
 ) -> Structure:
+    """Pass either the audio (stems or mix, at sample rate sr) or
+    precomputed frame features."""
     beats = [float(b) for b in beats]
     bpb = beats_per_bar_from(beats, downbeats)
     bar_starts = build_bars(beats, downbeats, duration, bpb)
@@ -542,7 +575,9 @@ def analyze_structure(
     if len(bar_starts) < 8:
         return Structure(bpm, bpb, beats, bar_starts, phrase_bars, 0,
                          list(range(0, len(bar_starts), phrase_bars)))
-    feats = bar_features(bar_starts, sr, stems=stems, mix=mix)
+    if frames is None:
+        frames = frame_features(sr, stems=stems, mix=mix)
+    feats = bars_from_frames(frames, bar_starts)
     origin, sections, energy = detect_sections(bar_starts, feats, phrase_bars)
 
     edges = list(bar_starts) + [duration]

@@ -60,17 +60,22 @@ jobs:
       - name: Build
         run: cmake --build build --parallel "$(nproc)"
 
-      - name: Unit tests (structure, beats, controller mappings)
+      - name: Unit tests (structure, brake, beats, controller mappings)
         run: >-
           cd build &&
-          ./mixxx-test --gtest_filter='TrackStructure*:BeatsTest*:BeatGrid*:BeatMap*:MidiMappings/*'
+          ./mixxx-test --gtest_filter='TrackStructure*:BrakeControl*:BeatsTest*:BeatGrid*:BeatMap*:MidiMappings/*'
         env:
           QT_QPA_PLATFORM: offscreen
 
-      - name: stemprep structure tests
+      - name: DDJ-SB2 mapping test (stand-in engine, no controller needed)
+        run: node tools/sb2-mapping-test/test.js
+
+      - name: stemprep tests (structure, playlist tracking, evaluation)
         run: |
           sudo apt-get install -y python3-numpy
           python3 tools/stemprep/tests/test_structure.py
+          python3 tools/stemprep/tests/test_playlists.py
+          python3 tools/stemprep/tests/test_evaluate.py
 
   windows:
     name: Windows x64 portable zip

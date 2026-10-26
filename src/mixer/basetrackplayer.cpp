@@ -13,6 +13,8 @@
 #include "engine/enginebuffer.h"
 #include "engine/enginemixer.h"
 #include "engine/sync/enginesync.h"
+#include "mixer/barcontrol.h"
+#include "mixer/brakecontrol.h"
 #include "mixer/phrasecontrol.h"
 #include "mixer/playerinfo.h"
 #include "mixer/playermanager.h"
@@ -85,6 +87,12 @@ BaseTrackPlayerImpl::BaseTrackPlayerImpl(
             &BaseTrackPlayerImpl::noVinylControlInputConfigured);
 
     m_pPhraseControl = make_parented<PhraseControl>(getGroup(), pConfig, this);
+    connect(m_pPhraseControl.get(),
+            &PhraseControl::reloadForNewStems,
+            this,
+            &BaseTrackPlayerImpl::slotReloadForNewStems);
+    m_pBrakeControl = make_parented<BrakeControl>(getGroup(), this);
+    m_pBarControl = make_parented<BarControl>(getGroup(), this);
 
     m_pEject = std::make_unique<ControlPushButton>(ConfigKey(getGroup(), "eject"));
     connect(m_pEject.get(),
@@ -541,6 +549,53 @@ void BaseTrackPlayerImpl::slotLoadTrack(TrackPointer pNewTrack,
 #endif
 }
 
+void BaseTrackPlayerImpl::slotReloadForNewStems() {
+#ifdef __STEM__
+    const TrackPointer pTrack = m_pLoadedTrack;
+    if (!pTrack || m_pPlay->toBool() || !m_pChannel->isPrimaryDeck()) {
+        return;
+    }
+    // AutoDJ reacts to tracks being loaded into its decks; don't surprise it
+    if (ControlObject::get(ConfigKey(QStringLiteral("[AutoDJ]"), QStringLiteral("enabled"))) > 0) {
+        return;
+    }
+    // Loading resets the position (cue recall), maybe tempo/pitch (speed
+    // auto reset) and the stem levels: keep what the DJ set up.
+    auto pState = std::make_unique<StemsReloadState>();
+    pState->pTrack = pTrack;
+    pState->playPosition = ControlObject::get(ConfigKey(getGroup(), QStringLiteral("playposition")));
+    pState->rateRatio = m_pRateRatio->get();
+    pState->pitchAdjust = m_pPitchAdjust->get();
+    for (int stemIdx = 0; stemIdx < mixxx::kMaxSupportedStems; ++stemIdx) {
+        const QString group = EngineDeck::getGroupForStem(getGroup(), stemIdx);
+        pState->stemVolume[stemIdx] = ControlObject::get(ConfigKey(group, QStringLiteral("volume")));
+        pState->stemMute[stemIdx] = ControlObject::get(ConfigKey(group, QStringLiteral("mute")));
+    }
+    m_pStemsReloadState = std::move(pState);
+    slotLoadTrack(pTrack, mixxx::StemChannelSelection(), false);
+#endif
+}
+
+void BaseTrackPlayerImpl::restoreStateAfterStemsReload() {
+#ifdef __STEM__
+    if (!m_pStemsReloadState) {
+        return;
+    }
+    const auto pState = std::move(m_pStemsReloadState);
+    if (pState->pTrack != m_pLoadedTrack) {
+        return; // another track was loaded meanwhile
+    }
+    m_pRateRatio->set(pState->rateRatio);
+    m_pPitchAdjust->set(pState->pitchAdjust);
+    for (int stemIdx = 0; stemIdx < mixxx::kMaxSupportedStems; ++stemIdx) {
+        const QString group = EngineDeck::getGroupForStem(getGroup(), stemIdx);
+        ControlObject::set(ConfigKey(group, QStringLiteral("volume")), pState->stemVolume[stemIdx]);
+        ControlObject::set(ConfigKey(group, QStringLiteral("mute")), pState->stemMute[stemIdx]);
+    }
+    ControlObject::set(ConfigKey(getGroup(), QStringLiteral("playposition")), pState->playPosition);
+#endif
+}
+
 void BaseTrackPlayerImpl::slotLoadFailed(TrackPointer pTrack, const QString& reason) {
     // Note: This slot can be a load failure from the current track or a
     // a delayed signal from a previous load.
@@ -591,6 +646,7 @@ void BaseTrackPlayerImpl::slotTrackLoaded(TrackPointer pNewTrack,
         m_pLoopOutPoint->set(kNoTrigger);
         m_pLoadedTrack.reset();
         m_pPhraseControl->trackLoaded(nullptr);
+        m_pBarControl->trackLoaded(nullptr);
         emit playerEmpty();
         emit trackRatingChanged(0);
     } else if (pNewTrack && pNewTrack == m_pLoadedTrack) {
@@ -696,7 +752,9 @@ void BaseTrackPlayerImpl::slotTrackLoaded(TrackPointer pNewTrack,
         }
 #endif
 
+        restoreStateAfterStemsReload();
         m_pPhraseControl->trackLoaded(m_pLoadedTrack);
+        m_pBarControl->trackLoaded(m_pLoadedTrack);
 
         emit newTrackLoaded(m_pLoadedTrack);
         emit trackRatingChanged(m_pLoadedTrack->getRating());

@@ -43,6 +43,7 @@
 #include "library/coverartutils.h"
 #include "track/globaltrackcache.h"
 #include "track/track.h"
+#include "track/trackstructure.h"
 #include "util/logger.h"
 #include "util/regex.h"
 
@@ -447,6 +448,37 @@ SoundSourceProxy::SoundSourceProxy(const QUrl& url)
         : m_url(url),
           m_providerRegistrations(allProviderRegistrationsForUrl(m_url)) {
     findProviderAndInitSoundSource();
+}
+
+SoundSourceProxy::SoundSourceProxy(TrackPointer pTrack, const QString& stemCacheLocation)
+        : m_pTrack(std::move(pTrack)),
+          m_url(QUrl::fromLocalFile(stemCacheLocation)),
+          m_stemCacheLocation(stemCacheLocation),
+          m_providerRegistrations(allProviderRegistrationsForUrl(m_url)) {
+    findProviderAndInitSoundSource();
+}
+
+// static
+mixxx::AudioSourcePointer SoundSourceProxy::openAudioSourceForDecoding(
+        const TrackPointer& pTrack,
+        const mixxx::AudioSource::OpenParams& params) {
+#ifdef __STEM__
+    if (pTrack) {
+        const QString stemCache = mixxx::TrackStructure::stemCacheFor(
+                pTrack->getLocation(), pTrack->getSampleRate());
+        if (!stemCache.isEmpty()) {
+            auto pAudioSource = SoundSourceProxy(pTrack, stemCache).openAudioSource(params);
+            if (pAudioSource) {
+                kLogger.info() << "Playing" << pTrack->getLocation()
+                               << "with stems from" << stemCache;
+                return pAudioSource;
+            }
+            kLogger.warning() << "Cannot open stem file" << stemCache
+                              << "- using the track's own file";
+        }
+    }
+#endif
+    return SoundSourceProxy(pTrack).openAudioSource(params);
 }
 
 mixxx::SoundSourceProviderPointer SoundSourceProxy::primaryProvider() {
@@ -957,6 +989,6 @@ mixxx::AudioSourcePointer SoundSourceProxy::openAudioSource(
     }
     // Overwrite metadata with actual audio properties
     m_pTrack->updateStreamInfoFromSource(
-            m_pSoundSource->getStreamInfo());
+            m_pSoundSource->getStreamInfo(), m_stemCacheLocation);
     return mixxx::AudioSourceTrackProxy::create(m_pTrack, m_pSoundSource);
 }

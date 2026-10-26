@@ -1,14 +1,22 @@
 #include "waveform/renderers/allshader/waveformrenderbeat.h"
 
 #include <QDomNode>
+#include <QFont>
+#include <QFontMetricsF>
+#include <QImage>
+#include <QPainter>
 #include <QVector4D>
 #include <algorithm>
+#include <cmath>
 
 #include "engine/engine.h"
 #include "moc_waveformrenderbeat.cpp"
 #include "rendergraph/geometry.h"
 #include "rendergraph/material/rgbamaterial.h"
+#include "rendergraph/material/texturematerial.h"
+#include "rendergraph/texture.h"
 #include "rendergraph/vertexupdaters/rgbavertexupdater.h"
+#include "rendergraph/vertexupdaters/texturedvertexupdater.h"
 #include "skin/legacy/skincontext.h"
 #include "track/track.h"
 #include "track/trackstructure.h"
@@ -26,10 +34,46 @@ namespace {
 // long drop) use this color unless the skin sets <PhraseColor>.
 const QColor kDefaultPhraseColor = QColor(0xFF, 0xB0, 0x00);
 
+// Section names visible at the same time (sections are at least 4 bars long,
+// so only a few fit on screen even when zoomed out).
+constexpr int kMaxSectionLabels = 6;
+
 QVector4D toVec(const QColor& color, float alphaScale) {
     float r, g, b, a;
     getRgbF(color, &r, &g, &b, &a);
     return {r, g, b, std::clamp(a * alphaScale, 0.f, 1.f)};
+}
+
+// Same look as the section names on the overview: bold name on the
+// section color. Drawn once per name with QPainter into a texture.
+QImage makeSectionLabelImage(const QString& text, const QColor& color, float devicePixelRatio) {
+    QFont font;
+    font.setPixelSize(10);
+    font.setBold(true);
+    const QFontMetricsF metrics(font);
+    const float width = std::ceil(static_cast<float>(metrics.horizontalAdvance(text))) + 8.f;
+    const float height = std::ceil(static_cast<float>(metrics.height())) + 2.f;
+    QImage image(QSize(static_cast<int>(std::lround(width * devicePixelRatio)),
+                         static_cast<int>(std::lround(height * devicePixelRatio))),
+            QImage::Format_ARGB32_Premultiplied);
+    if (image.isNull()) {
+        return image;
+    }
+    image.setDevicePixelRatio(devicePixelRatio);
+    image.fill(Qt::transparent);
+
+    QPainter painter(&image);
+    painter.setRenderHint(QPainter::Antialiasing);
+    QColor background = color;
+    background.setAlphaF(0.85f);
+    painter.setPen(Qt::NoPen);
+    painter.setBrush(background);
+    painter.drawRoundedRect(QRectF(0, 0, width, height), 3, 3);
+    painter.setFont(font);
+    painter.setPen(color.lightnessF() > 0.6 ? Qt::black : Qt::white);
+    painter.drawText(QRectF(0, 0, width, height), Qt::AlignCenter, text);
+    painter.end();
+    return image;
 }
 
 } // namespace
@@ -42,6 +86,13 @@ WaveformRenderBeat::WaveformRenderBeat(WaveformWidgetRenderer* waveformWidget,
           m_isSlipRenderer(type == ::WaveformRendererAbstract::Slip) {
     initForRectangles<RGBAMaterial>(0);
     setUsePreprocess(true);
+    if (!m_isSlipRenderer) {
+        for (int i = 0; i < kMaxSectionLabels; ++i) {
+            auto pNode = std::make_unique<GeometryNode>();
+            pNode->initForRectangles<TextureMaterial>(0);
+            m_sectionLabels.push_back(SectionLabel{appendChildNode(std::move(pNode))});
+        }
+    }
 }
 
 void WaveformRenderBeat::setup(const QDomNode& node, const SkinContext& skinContext) {
@@ -73,6 +124,71 @@ void WaveformRenderBeat::preprocess() {
     if (!preprocessInner()) {
         geometry().allocate(0);
         markDirtyGeometry();
+        hideSectionLabels();
+    }
+}
+
+void WaveformRenderBeat::hideSectionLabels() {
+    for (auto& label : m_sectionLabels) {
+        if (label.pNode->geometry().vertexCount() > 0) {
+            label.pNode->geometry().allocate(0);
+            label.pNode->markDirtyGeometry();
+        }
+    }
+}
+
+void WaveformRenderBeat::updateSectionLabels(
+        const std::vector<SectionSpanOnScreen>& sections, float bottom) {
+    const float devicePixelRatio = m_waveformRenderer->getDevicePixelRatio();
+    const auto roundToPixel = [devicePixelRatio](float v) {
+        return std::round(v * devicePixelRatio) / devicePixelRatio;
+    };
+    // Each section always uses the same node (index modulo pool size), so a
+    // label's texture is only redrawn when a far-away section takes it over.
+    std::vector<bool> shown(m_sectionLabels.size(), false);
+    for (const auto& section : sections) {
+        const size_t slot = static_cast<size_t>(section.index) % m_sectionLabels.size();
+        if (shown[slot]) {
+            continue; // more sections on screen than nodes
+        }
+        auto& label = m_sectionLabels[slot];
+        const QString text = section.label.toUpper();
+        const QString key = text + section.color.name(QColor::HexArgb) +
+                QString::number(devicePixelRatio);
+        if (label.textureKey != key) {
+            const QImage image = makeSectionLabelImage(text, section.color, devicePixelRatio);
+            if (image.isNull()) {
+                continue;
+            }
+            dynamic_cast<TextureMaterial&>(label.pNode->material())
+                    .setTexture(std::make_unique<Texture>(
+                            m_waveformRenderer->getContext(), image));
+            label.pNode->markDirtyMaterial();
+            label.textureKey = key;
+            label.width = image.width() / devicePixelRatio;
+            label.height = image.height() / devicePixelRatio;
+        }
+        // Only where the visible part of the section is wide enough
+        if (section.x2 - section.x1 < label.width + 4.f) {
+            continue;
+        }
+        // At the section start; while the start has scrolled past the left
+        // edge, the name stays at the edge so the current section is named.
+        const float x = roundToPixel(std::max(section.x1, 0.f) + 2.f);
+        const float y = roundToPixel(bottom - label.height - 2.f);
+        label.pNode->geometry().allocate(6);
+        TexturedVertexUpdater vertexUpdater{
+                label.pNode->geometry().vertexDataAs<Geometry::TexturedPoint2D>()};
+        vertexUpdater.addRectangle({x, y}, {x + label.width, y + label.height}, {0.f, 0.f}, {1.f, 1.f});
+        label.pNode->markDirtyGeometry();
+        shown[slot] = true;
+    }
+    for (size_t slot = 0; slot < m_sectionLabels.size(); ++slot) {
+        auto& label = m_sectionLabels[slot];
+        if (!shown[slot] && label.pNode->geometry().vertexCount() > 0) {
+            label.pNode->geometry().allocate(0);
+            label.pNode->markDirtyGeometry();
+        }
     }
 }
 
@@ -213,13 +329,17 @@ bool WaveformRenderBeat::preprocessInner() {
         }
     }
 
-    // Section strip along the bottom edge: Intro/Build/Drop/... colors.
+    // Section strip along the bottom edge: Intro/Build/Drop/... colors,
+    // with the section names just above it.
     if (numSectionBoxes > 0) {
         const float stripHeight = std::max(3.f, rendererBreadth * 0.04f);
         const float y2 = rendererBreadth;
         const float y1 = y2 - stripHeight;
         const float rendererLength = static_cast<float>(m_waveformRenderer->getLength());
+        std::vector<SectionSpanOnScreen> onScreen;
+        int sectionIndex = -1;
         for (const auto& section : pAlignment->sections) {
+            ++sectionIndex;
             const auto start = mixxx::TrackStructure::beatPosition(*trackBeats, section.startBeat);
             const auto end = mixxx::TrackStructure::beatPosition(*trackBeats, section.endBeat);
             float x1 = static_cast<float>(m_waveformRenderer->transformSamplePositionInRendererWorld(
@@ -232,9 +352,14 @@ bool WaveformRenderBeat::preprocessInner() {
                 // Off screen: still emit a degenerate box to match the
                 // reserved vertex count.
                 x2 = x1;
+            } else if (!section.label.isEmpty()) {
+                onScreen.push_back({sectionIndex, x1, x2, section.label, section.color});
             }
             vertexUpdater.addRectangle({x1, y1}, {x2, y2}, toVec(section.color, 0.85f));
         }
+        updateSectionLabels(onScreen, y1);
+    } else {
+        hideSectionLabels();
     }
     markDirtyGeometry();
 

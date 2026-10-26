@@ -11,12 +11,13 @@ import json
 import struct
 import subprocess
 import tempfile
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Dict, Optional
 
 import numpy as np
 
-from .audio import SAMPLE_RATE, find_ffmpeg, write_wav
+from .audio import SAMPLE_RATE, find_ffmpeg
 
 STEM_ORDER = ("drums", "bass", "other", "vocals")
 STEM_NAMES = {"drums": "Drums", "bass": "Bass", "other": "Melody", "vocals": "Vocals"}
@@ -45,32 +46,41 @@ def write_stem_file(
     bitrate: str = "256k",
     sample_rate: int = SAMPLE_RATE,
 ) -> Path:
-    """Encode mix + 4 stems to AAC in one MP4 and add the stem manifest."""
+    """Encode mix + 4 stems to AAC in one MP4 and add the stem manifest.
+
+    ffmpeg (4.x) encodes the streams of one file on a single core, and AAC
+    encoding of five streams takes about as long as the beat tracking. So
+    each stream is encoded by its own ffmpeg process in parallel, fed through
+    a pipe, and the results are put together without re-encoding."""
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     tmp_out = out_path.with_name(out_path.name + ".part.mp4")
-    with tempfile.TemporaryDirectory(prefix="stemprep_") as tmp:
-        tmp = Path(tmp)
-        inputs = [tmp / "mix.wav"] + [tmp / f"{s}.wav" for s in STEM_ORDER]
-        n = mix.shape[1]
-        write_wav(inputs[0], _fit(mix, n), sample_rate)
-        for s, p in zip(STEM_ORDER, inputs[1:]):
-            write_wav(p, _fit(stems[s], n), sample_rate)
+    n = mix.shape[1]
+    signals = [_fit(mix, n)] + [_fit(stems[s], n) for s in STEM_ORDER]
+    ffmpeg = find_ffmpeg()
 
-        cmd = [find_ffmpeg(), "-v", "error", "-nostdin", "-y"]
-        for p in inputs:
+    with tempfile.TemporaryDirectory(prefix="stemprep_") as tmp:
+        parts = [Path(tmp) / f"{i}.m4a" for i in range(len(signals))]
+        with ThreadPoolExecutor(max_workers=len(signals)) as pool:
+            jobs = [pool.submit(_encode_aac, ffmpeg, x, p, sample_rate, bitrate)
+                    for x, p in zip(signals, parts)]
+            for job in jobs:
+                job.result()  # raises if one failed
+
+        cmd = [ffmpeg, "-v", "error", "-nostdin", "-y"]
+        for p in parts:
             cmd += ["-i", str(p)]
         has_source = source_for_tags is not None and Path(source_for_tags).exists()
         if has_source:
             cmd += ["-i", str(source_for_tags)]
-        for i in range(len(inputs)):
+        for i in range(len(parts)):
             cmd += ["-map", f"{i}:a:0"]
         if has_source:
-            src = len(inputs)
+            src = len(parts)
             # Copy title/artist/album/etc. and the cover picture if there is one
             cmd += ["-map_metadata", str(src), "-map", f"{src}:v:0?",
                     "-c:v", "copy", "-disposition:v:0", "attached_pic"]
-        cmd += ["-c:a", "aac", "-b:a", bitrate, "-ar", str(sample_rate)]
+        cmd += ["-c:a", "copy"]
         for i, name in enumerate(["Mix"] + [STEM_NAMES[s] for s in STEM_ORDER]):
             cmd += [f"-metadata:s:a:{i}", f"handler_name={name}"]
         cmd += ["-f", "mp4", str(tmp_out)]
@@ -81,6 +91,28 @@ def write_stem_file(
     add_stem_manifest(tmp_out, manifest())
     tmp_out.replace(out_path)
     return out_path
+
+
+def _encode_aac(ffmpeg: str, x: np.ndarray, out: Path, sample_rate: int, bitrate: str) -> None:
+    """Stereo float audio -> AAC in an .m4a, piped through stdin."""
+    cmd = [ffmpeg, "-v", "error", "-nostdin", "-y",
+           "-f", "f32le", "-ar", str(sample_rate), "-ac", "2", "-i", "-",
+           "-c:a", "aac", "-b:a", bitrate, str(out)]
+    # stderr goes to a file: a full pipe could block ffmpeg while we write
+    with tempfile.TemporaryFile() as err:
+        proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
+                                stderr=err)
+        try:
+            chunk = sample_rate * 10
+            for s in range(0, x.shape[1], chunk):
+                proc.stdin.write(np.ascontiguousarray(x[:, s:s + chunk].T).tobytes())
+            proc.stdin.close()
+        except BrokenPipeError:
+            pass  # ffmpeg stopped early; its message is reported below
+        if proc.wait() != 0:
+            err.seek(0)
+            raise RuntimeError("ffmpeg failed encoding a stem:\n" +
+                               err.read().decode(errors="replace"))
 
 
 def _fit(x: np.ndarray, n: int) -> np.ndarray:

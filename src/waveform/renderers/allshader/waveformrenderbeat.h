@@ -1,6 +1,8 @@
 #pragma once
 
 #include <QColor>
+#include <QString>
+#include <vector>
 
 #include "rendergraph/geometrynode.h"
 #include "util/class.h"
@@ -43,7 +45,27 @@ class allshader::WaveformRenderBeat final
     QColor m_phraseColor;
     bool m_isSlipRenderer;
 
+    /// A section name drawn above the section strip. The child nodes are
+    /// created once and hidden (no vertices) when not needed, so the node
+    /// tree never changes while rendering.
+    struct SectionLabel {
+        rendergraph::GeometryNode* pNode;
+        QString textureKey;
+        float width = 0;
+        float height = 0;
+    };
+    std::vector<SectionLabel> m_sectionLabels;
+
     bool preprocessInner();
+    struct SectionSpanOnScreen {
+        int index;
+        float x1;
+        float x2;
+        QString label;
+        QColor color;
+    };
+    void updateSectionLabels(const std::vector<SectionSpanOnScreen>& sections, float bottom);
+    void hideSectionLabels();
 
     DISALLOW_COPY_AND_ASSIGN(WaveformRenderBeat);
 };

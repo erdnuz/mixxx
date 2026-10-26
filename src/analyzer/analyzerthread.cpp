@@ -129,7 +129,8 @@ void AnalyzerThread::doRun() {
 
         // Get the audio
         mixxx::AudioSourcePointer audioSource =
-                SoundSourceProxy(m_currentTrack->getTrack()).openAudioSource(openParams);
+                SoundSourceProxy::openAudioSourceForDecoding(
+                        m_currentTrack->getTrack(), openParams);
         if (!audioSource) {
             kLogger.warning()
                     << "Failed to open file for analyzing:"

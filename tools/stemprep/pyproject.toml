@@ -14,6 +14,7 @@ dependencies = [
     "torch>=2.1",
     "torchaudio>=2.1",
     "demucs>=4.1.0",
+    "onnxruntime>=1.17",  # Spleeter fast stems
     "beat-this>=1.1",
     "spotdl>=4.2",
     "soxr",

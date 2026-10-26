@@ -54,6 +54,8 @@ class TrackStructure {
         };
 
         int beatsPerBar = 4;
+        /// Grid beats in one phrase (phrase_bars bars).
+        int phraseBeats = 32;
         /// Beat index i is the first beat of a bar if
         /// floorMod(i - barPhase, beatsPerBar) == 0.
         int barPhase = 0;
@@ -81,6 +83,35 @@ class TrackStructure {
         int barStartAtOrBefore(int beatIndex) const {
             return beatIndex - floorMod(beatIndex - barPhase, beatsPerBar);
         }
+        /// 1-based beat in the bar.
+        int beatInBar(int beatIndex) const {
+            return floorMod(beatIndex - barPhase, beatsPerBar) + 1;
+        }
+        /// Whole beats from beatIndex to the next downbeat (1..beatsPerBar).
+        int beatsUntilBar(int beatIndex) const {
+            return beatsPerBar - floorMod(beatIndex - barPhase, beatsPerBar);
+        }
+        /// Start of the phrase containing beatIndex: the last phrase start at
+        /// or before it, continued backwards in whole phrases before the
+        /// first one; without phrase data, phrases counted from the bar phase.
+        int phraseStartAtOrBefore(int beatIndex) const;
+        /// Beats since the start of the current phrase (0..phraseBeats-1).
+        int positionInPhrase(int beatIndex) const {
+            return floorMod(beatIndex - phraseStartAtOrBefore(beatIndex), phraseBeats);
+        }
+        /// First phrase start after beatIndex.
+        int nextPhraseStart(int beatIndex) const;
+
+        /// Whole beats to move a deck whose position in its phrase (or bar)
+        /// is `own` so that it matches `reference`; the smallest move, in
+        /// (-period/2, period/2].
+        static int syncDelta(int own, int reference, int period) {
+            int delta = floorMod(reference - own, period);
+            if (delta > period / 2) {
+                delta -= period;
+            }
+            return delta;
+        }
 
         static int floorMod(int a, int b) {
             const int m = a % b;
@@ -106,6 +137,20 @@ class TrackStructure {
     /// Remember in the sidecar that the suggested hot cues were added to the
     /// library once, so cues the user deletes don't come back.
     static bool markCuesApplied(const QString& trackLocation);
+
+    /// The stem file stemprep made for this track ("stems" in the sidecar),
+    /// to be decoded instead of the track's own file so it plays with stems.
+    /// Empty unless the stem file exists, was made from this very file (same
+    /// size), plays in sync with it (|stems_offset_ms| <= 5) and has the
+    /// track's sample rate (beats and cues are stored in frames).
+    static QString stemCacheFor(const QString& trackLocation, audio::SampleRate trackSampleRate);
+
+    /// True if the sections were detected from separated stems ("tier":
+    /// "stems"; files without a tier were always made from stems). Analyses
+    /// from the full mix only ("tier": "mix") are rougher.
+    bool analyzedFromStems() const {
+        return m_fromStems;
+    }
 
     double bpm() const {
         return m_bpm;
@@ -152,6 +197,7 @@ class TrackStructure {
     QList<Section> m_sections;
     QList<CueSuggestion> m_cues;
     bool m_cuesApplied = false;
+    bool m_fromStems = true;
 
     mutable std::mutex m_alignmentMutex;
     mutable BeatsPointer m_pAlignedBeats;

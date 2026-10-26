@@ -1,5 +1,7 @@
 #pragma once
 
+#include <QDateTime>
+#include <QFileSystemWatcher>
 #include <QObject>
 #include <memory>
 
@@ -22,10 +24,18 @@ class ControlPushButton;
 ///   [ChannelN],section_jump_backward  (Intro, Build, Drop, Breakdown...)
 ///   [ChannelN],beats_until_phrase     beats left until the next phrase
 ///   [ChannelN],section_index          index of the current section, -1 if none
+///   [ChannelN],stems_ready_on_reload  1 if stemprep made (better) stems for
+///                                     the loaded track; they play after
+///                                     loading it again
 ///
-/// When a track with structure data is loaded for the first time, the
-/// suggested hot cues (BUILD, DROP, BREAKDOWN...) are added to free hot cue
-/// slots, unless [Structure],AutoHotcues is 0.
+/// When a track with structure data from stems is loaded for the first time,
+/// the suggested hot cues (BUILD, DROP, BREAKDOWN...) are added to free hot
+/// cue slots, unless [Structure],AutoHotcues is 0. Analyses from the full
+/// mix only are shown but don't add cues (they may still improve).
+///
+/// Loading a track into a deck asks stemprep for stems (StemprepQueue); the
+/// structure file is watched, so sections appear and improve while the track
+/// is loaded.
 class PhraseControl : public QObject {
     Q_OBJECT
   public:
@@ -34,9 +44,17 @@ class PhraseControl : public QObject {
 
     void trackLoaded(TrackPointer pTrack);
 
+  signals:
+    /// stemprep made (better) stems for the loaded track and the deck is
+    /// stopped: the player reloads the track to play them. While the deck
+    /// plays this waits until it stops ([Structure],AutoReloadStems = 0: off).
+    void reloadForNewStems();
+
   private slots:
+    void slotPlayChanged(double play);
     void slotStructureOrBeatsChanged();
     void slotPositionChanged(double playPosition);
+    void slotTrackDirectoryChanged();
 
   private:
     enum class Target {
@@ -46,6 +64,9 @@ class PhraseControl : public QObject {
     void jump(Target target, int direction);
     void maybeAddCues(const TrackPointer& pTrack);
     void updateStatus();
+    void watchSidecar();
+    void updateStemsReady();
+    bool isDeck() const;
     /// Index of the grid beat at or before the play position; false if unknown.
     bool currentBeat(const TrackPointer& pTrack, int* pBeatIndex) const;
 
@@ -64,8 +85,19 @@ class PhraseControl : public QObject {
     std::unique_ptr<ControlPushButton> m_pSectionBackward;
     std::unique_ptr<ControlObject> m_pBeatsUntilPhrase;
     std::unique_ptr<ControlObject> m_pSectionIndex;
+    std::unique_ptr<ControlObject> m_pStemsReadyOnReload;
+
+    // The structure file is replaced by renaming, so the folder is watched
+    // and the file's time stamp compared.
+    QFileSystemWatcher m_watcher;
+    QDateTime m_sidecarModified;
+    // Stem file the loaded track is playing from (empty: its own file)
+    QString m_loadedStemCache;
+    // New stems arrived while the deck was playing
+    bool m_reloadWhenStopped = false;
 
     parented_ptr<ControlProxy> m_pPlayPosition;
+    parented_ptr<ControlProxy> m_pPlay;
     parented_ptr<ControlProxy> m_pTrackSamples;
     parented_ptr<ControlProxy> m_pBeatJump;
 };

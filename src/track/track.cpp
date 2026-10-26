@@ -1478,10 +1478,10 @@ bool Track::setStemInfosWhileLocked(QList<StemInfo> stemInfos) {
     return true;
 }
 
-bool Track::importPendingStemInfosWhileLocked() {
+bool Track::importPendingStemInfosWhileLocked(const QString& stemFileLocation) {
     const QList<StemInfo> stemInfos =
             mixxx::StemInfoImporter::importStemInfos(
-                    getLocation());
+                    stemFileLocation);
 
     return setStemInfosWhileLocked(stemInfos);
 }
@@ -1906,14 +1906,22 @@ void Track::setAudioProperties(
 }
 
 void Track::updateStreamInfoFromSource(
-        mixxx::audio::StreamInfo&& streamInfo) {
+        mixxx::audio::StreamInfo&& streamInfo,
+        const QString& stemCacheLocation) {
     auto locked = lockMutex(&m_qMutex);
     bool updated = m_record.updateStreamInfoFromSource(streamInfo);
 
     const bool importBeats = m_pBeatsImporterPending && !m_pBeatsImporterPending->isEmpty();
     const bool importCueInfos = m_pCueInfoImporterPending && !m_pCueInfoImporterPending->isEmpty();
 #ifdef __STEM__
-    const bool importStemInfos = mixxx::StemInfoImporter::maybeStemFile(getLocation());
+    const QString stemFileLocation =
+            stemCacheLocation.isEmpty() ? getLocation() : stemCacheLocation;
+    // Also re-import (to none) if the track had stems from a stem file made
+    // for it that is gone now.
+    const bool importStemInfos = mixxx::StemInfoImporter::maybeStemFile(stemFileLocation) ||
+            !m_stemInfo.isEmpty();
+#else
+    Q_UNUSED(stemCacheLocation);
 #endif
 
     if (!importBeats && !importCueInfos
@@ -1950,7 +1958,7 @@ void Track::updateStreamInfoFromSource(
     if (importStemInfos) {
         kLogger.debug()
                 << "Importing stem(s) info";
-        stemsImported = importPendingStemInfosWhileLocked();
+        stemsImported = importPendingStemInfosWhileLocked(stemFileLocation);
     }
 #endif
 

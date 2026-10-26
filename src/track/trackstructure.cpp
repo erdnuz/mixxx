@@ -99,6 +99,28 @@ QList<int> TrackStructure::Alignment::sortedPhraseStarts() const {
     return result;
 }
 
+int TrackStructure::Alignment::phraseStartAtOrBefore(int beatIndex) const {
+    const QList<int> starts = sortedPhraseStarts();
+    if (starts.isEmpty()) {
+        return beatIndex - floorMod(beatIndex - barPhase, phraseBeats);
+    }
+    if (beatIndex < starts.first()) {
+        return beatIndex - floorMod(beatIndex - starts.first(), phraseBeats);
+    }
+    const auto it = std::upper_bound(starts.begin(), starts.end(), beatIndex);
+    return *std::prev(it);
+}
+
+int TrackStructure::Alignment::nextPhraseStart(int beatIndex) const {
+    const QList<int> starts = sortedPhraseStarts();
+    const auto it = std::upper_bound(starts.begin(), starts.end(), beatIndex);
+    if (it != starts.end()) {
+        return *it;
+    }
+    // After the last one (or without phrase data): whole phrases onwards
+    return phraseStartAtOrBefore(beatIndex) + phraseBeats;
+}
+
 // static
 QString TrackStructure::sidecarPath(const QString& trackLocation) {
     return trackLocation + kSidecarSuffix;
@@ -172,6 +194,7 @@ TrackStructurePointer TrackStructure::fromJson(const QByteArray& json, QString* 
     pStructure->m_downbeats = toDoubleVector(root.value(QStringLiteral("downbeats")));
     pStructure->m_phrases = toDoubleVector(root.value(QStringLiteral("phrases")));
     pStructure->m_cuesApplied = root.value(QStringLiteral("mixxx_cues_applied")).toBool(false);
+    pStructure->m_fromStems = root.value(QStringLiteral("tier")).toString() != QStringLiteral("mix");
 
     const QJsonArray sections = root.value(QStringLiteral("sections")).toArray();
     for (const auto& value : sections) {
@@ -216,6 +239,45 @@ TrackStructurePointer TrackStructure::fromJson(const QByteArray& json, QString* 
         return nullptr;
     }
     return pStructure;
+}
+
+// static
+QString TrackStructure::stemCacheFor(
+        const QString& trackLocation, audio::SampleRate trackSampleRate) {
+    if (trackLocation.isEmpty()) {
+        return {};
+    }
+    QFile file(sidecarPath(trackLocation));
+    if (!file.exists() || file.size() > kMaxSidecarBytes || !file.open(QIODevice::ReadOnly)) {
+        return {};
+    }
+    const QJsonObject root = QJsonDocument::fromJson(file.readAll()).object();
+    const QString stemPath = root.value(QStringLiteral("stems")).toString();
+    if (stemPath.isEmpty() || QFileInfo(stemPath) == QFileInfo(trackLocation)) {
+        return {}; // no stem file, or the track is the stem file itself
+    }
+    const auto refuse = [&](const char* reason) {
+        kLogger.info() << "Not using stem file" << stemPath << "for"
+                       << QFileInfo(trackLocation).fileName() << ":" << reason;
+        return QString();
+    };
+    if (!QFileInfo(stemPath).isFile()) {
+        return refuse("missing");
+    }
+    // Made from this file, not an older version of it
+    if (root.value(QStringLiteral("source_size")).toDouble(-1) !=
+            static_cast<double>(QFileInfo(trackLocation).size())) {
+        return refuse("the track's file has changed since");
+    }
+    const QJsonValue offset = root.value(QStringLiteral("stems_offset_ms"));
+    if (!offset.isDouble() || std::abs(offset.toDouble()) > 5.0) {
+        return refuse("not in sync with the track");
+    }
+    const int stemSampleRate = root.value(QStringLiteral("stems_sample_rate")).toInt(0);
+    if (!trackSampleRate.isValid() || stemSampleRate != static_cast<int>(trackSampleRate.value())) {
+        return refuse("different sample rate");
+    }
+    return stemPath;
 }
 
 // static
@@ -286,6 +348,7 @@ std::shared_ptr<TrackStructure::Alignment> TrackStructure::computeAlignment(
     }
     pAlignment->beatsPerBar = std::max(1, gridBeatsPerBar);
     const int bpb = pAlignment->beatsPerBar;
+    pAlignment->phraseBeats = std::max(1, m_phraseBars) * bpb;
 
     // Bar phase: majority vote of the detected downbeats.
     QVector<int> votes(bpb, 0);
