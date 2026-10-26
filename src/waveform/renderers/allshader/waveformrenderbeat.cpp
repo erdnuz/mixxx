@@ -90,7 +90,9 @@ WaveformRenderBeat::WaveformRenderBeat(WaveformWidgetRenderer* waveformWidget,
         for (int i = 0; i < kMaxSectionLabels; ++i) {
             auto pNode = std::make_unique<GeometryNode>();
             pNode->initForRectangles<TextureMaterial>(0);
-            m_sectionLabels.push_back(SectionLabel{appendChildNode(std::move(pNode))});
+            SectionLabel label;
+            label.pNode = appendChildNode(std::move(pNode));
+            m_sectionLabels.push_back(label);
         }
     }
 }

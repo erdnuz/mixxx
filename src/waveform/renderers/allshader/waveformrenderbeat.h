@@ -49,7 +49,7 @@ class allshader::WaveformRenderBeat final
     /// created once and hidden (no vertices) when not needed, so the node
     /// tree never changes while rendering.
     struct SectionLabel {
-        rendergraph::GeometryNode* pNode;
+        rendergraph::GeometryNode* pNode = nullptr;
         QString textureKey;
         float width = 0;
         float height = 0;
