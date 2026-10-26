@@ -20,8 +20,9 @@ What's new in this build
   lines on phrase and section starts, a colored strip with the section names
   (Intro, Build, Drop, Breakdown, Outro) along the bottom; the overview
   shows the same strip.
-* Hot cues are added at builds, drops and breakdowns as soon as the section
-  names appear (only into empty slots 1-8). When the stems are ready they
+* Hot cues (up to 8, in empty slots) are added as soon as the section
+  names appear: drops first, then grooves, breakdowns and builds. The
+  pads keep that order (DROP, DROP 2, ... BUILD). When the stems are ready they
   move to the improved positions (while the deck is stopped); cues you moved,
   renamed or deleted are left alone. Off: [Structure] AutoHotcues 0 in
   mixxx.cfg.
@@ -29,6 +30,7 @@ What's new in this build
   turntable; press again to spin back up.
 * Controls for mappings / keyboard ([ChannelN]):
     phrase_jump_forward/backward, section_jump_forward/backward
+    sync_step          next sync step: beats, bars, next drops (see SYNC)
     phrase_sync        line this deck's phrase position up with the playing deck
     play_on_phrase     start exactly on the playing deck's next phrase
     stem_mask_on_bar   stems to hear from the next downbeat (bit mask)
@@ -43,8 +45,11 @@ In Preferences > Controllers > DDJ-SB2 choose
 "Pioneer DDJ-SB2 (Stems + Phrases)".
 
 Transport
-* SYNC (tap) on a stopped deck: tempo + beats + bars and phrases line up with
-  the playing deck. Hold = sync lock. SHIFT + SYNC = quantize (LED shows it).
+* SYNC tap, in steps against the playing deck: 1st tap beats, 2nd tap bars,
+  3rd tap jumps whole bars so your next drop lands on their next drop.
+  Stopped deck: 1st tap tempo + place in the phrase, 2nd tap = it starts by
+  itself so both next drops meet (tap again to cancel). Steps already done
+  are skipped. Hold SYNC = sync lock on/off. SHIFT + SYNC = quantize.
 * SHIFT + PLAY: brake to a stop, again = spin back up (PLAY blinks meanwhile).
 * SHIFT + TEMPO slider: key, in semitones (takes over at the current key).
 * SHIFT + KEYLOCK: glide tempo back to 0 and reset the key.

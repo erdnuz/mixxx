@@ -79,7 +79,9 @@ file (and next to the source file).
   `stemprep add|sync|list|remove`. Sync reads only the playlist listing
   (`get_simple_songs`), full spotDL metadata (`reinit_song`) only for tracks
   being downloaded; lyrics fetching is off. Existing files in any format are
-  adopted by name. Removed tracks are reported, files kept. Writes
+  adopted by name. Removed tracks are reported, files kept. Failed downloads
+  are recorded per track (`download_failed`, `download_attempts`) and
+  skipped for 7 days; `sync --retry-failed` tries them now. Writes
   `Downloads/<folder>/<folder>.m3u8` (the library tracks) for import into Mixxx.
 - Frame features are cached in `Stems/<playlist>/.stemprep/*.features.npz`;
   `stemprep reanalyze` reruns structure detection from them in seconds and
@@ -157,7 +159,10 @@ New files `res/controllers/Pioneer-DDJ-SB2-Stems.midi.xml` +
 - SHIFT+PLAY = the deck's `brake` control (shared with the skin button);
   options `brakeSeconds` / `softStartSeconds` (null = deck setting); PLAY
   blinks while `brake_active`
-- SYNC tap on a stopped deck → also `phrase_sync` (`syncAlignsPhrases`);
+- SYNC tap → `sync_step` (BarControl: playing deck beatsync → bar jump →
+  drop jump so the next drops meet; stopped deck tempo+phrase_sync → cue sync
+  of the next drops; done steps skipped), hold = sync lock toggle
+  (`syncAlignsPhrases`);
   SHIFT+SYNC LED (0x5C) = quantize. Note: components.SyncButton replaces its
   `input` in unshift()/shift(), so overrides must wrap inside `unshift`.
 - CUE LOOP pads: stem mute on release (hold + FILTER = that stem's

@@ -51,6 +51,20 @@ class ControlPushButton;
 ///                                 two cues meet; 0 again once started; set 0
 ///                                 to cancel
 ///
+/// Sync in steps (the SYNC button's tap):
+///   [ChannelN],sync_step          each press does the next step against the
+///                                 reference deck. Playing deck: 1. beats
+///                                 (beatsync) 2. bars (jump by whole beats so
+///                                 the downbeats meet) 3. drops (jump by whole
+///                                 bars so this deck's next drop lands on the
+///                                 reference's next drop). Stopped deck:
+///                                 1. tempo + place in the phrase 2. cue sync
+///                                 of the next drops (cue_sync with both DROP
+///                                 cues; again = cancel). Done steps are
+///                                 skipped, so a synced deck goes on to bars.
+///
+/// Drops are hot cues labelled DROP..., else sections labelled Drop.
+///
 /// The reference deck is the sync leader if it is another playing deck with
 /// structure, else another playing deck with structure.
 ///
@@ -84,19 +98,30 @@ class BarControl : public QObject {
     static double msUntilBeat(const DeckPosition& pos, int targetBeat);
 
     void updateStatus();
-    void phraseSync();
+    /// Returns the beats jumped.
+    int phraseSync();
+    void syncStep();
+    /// Jump by whole bars so the next drops of both decks meet.
+    void dropSync(const DeckPosition& own, const QString& refGroup, const DeckPosition& ref);
     void armPlayOnPhrase(bool arm);
     void armCueSync(bool arm);
+    /// cue_sync with these cues and deck (see cue_sync_mine/theirs/deck)
+    void armCueSyncWith(int mineHotcue, int theirsHotcue, int deck);
     /// Start this deck when `referenceGroup` reaches grid beat `targetBeat`.
     /// followPhrases: if the reference jumps past it, wait for its next
     /// phrase (play_on_phrase); otherwise give up (cue_sync).
     void startPlayAt(const QString& referenceGroup, int targetBeat, bool followPhrases);
     void cancelPlayStart();
     void firePlayStart();
-    /// Grid beat of a hot cue (1-based number; 0 = first DROP cue at or after
+    /// Grid beat of a hot cue (1-based number; 0 = first drop at or after
     /// fromBeat), or nothing.
     static std::optional<int> cueBeat(
             const TrackPointer& pTrack, const DeckPosition& pos, int hotcue, int fromBeat);
+    /// Grid beats of the drops, sorted: hot cues labelled DROP..., or if
+    /// there are none, the starts of sections labelled Drop.
+    static QList<int> dropBeats(const TrackPointer& pTrack, const DeckPosition& pos);
+    /// Grid beat closest to a frame position.
+    static int closestBeat(const DeckPosition& pos, mixxx::audio::FramePos position);
     void requestStemMask(int mask);
     void applyStemMask();
     void loopBeats(int startBeat, int lengthBeats);
@@ -109,6 +134,10 @@ class BarControl : public QObject {
     std::unique_ptr<ControlObject> m_pBeatsUntilBar;
     std::unique_ptr<ControlObject> m_pBarInPhrase;
     std::unique_ptr<ControlPushButton> m_pPhraseSync;
+    std::unique_ptr<ControlPushButton> m_pSyncStep;
+    // Stopped deck: the first step left this track at this beat position
+    const Track* m_pSyncStepTrack = nullptr;
+    double m_syncStepPosition = 0;
     std::unique_ptr<ControlObject> m_pPlayOnPhrase;
     std::unique_ptr<ControlObject> m_pStemMaskOnBar;
     std::unique_ptr<ControlObject> m_pStemMaskPending;

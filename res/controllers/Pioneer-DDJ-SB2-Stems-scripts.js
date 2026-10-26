@@ -62,9 +62,11 @@ PioneerDDJSB2.stemPads = true;
 // count down (4 lit, 3, 2, then pad 1 blinks). If false, the pads load samplers.
 PioneerDDJSB2.phraseBankPads = true;
 
-// If true, SYNC on a stopped deck also lines up bars and phrases with the
-// playing deck (Mixxx itself only lines up beats). Needs structure data on
-// both decks.
+// If true, SYNC taps go in steps (sync_step): beats, then bars, then the next
+// drops of both tracks meet (a stopped deck: tempo + phrase, then it starts
+// by itself so the drops meet). Holding SYNC turns sync lock on/off. Needs
+// structure data on both decks (otherwise a tap is a plain beat sync).
+// false = Mixxx's own SYNC button.
 PioneerDDJSB2.syncAlignsPhrases = true;
 
 // If true, the stem pads take effect exactly on the next downbeat, so a drop
@@ -299,18 +301,24 @@ PioneerDDJSB2.Deck = function(deckNumber) {
         shiftControl: true,
         // The SHIFT LED (0x5C) shows quantize instead, see quantizeLed
         sendShifted: false,
-        // SyncButton sets its own input() for each layer: wrap the plain one
+        // SyncButton sets its own input() for each layer: replace the plain one
         unshift: function() {
             components.SyncButton.prototype.unshift.call(this);
-            const syncInput = this.input;
-            this.input = function(channel, control, value, status, group) {
-                syncInput.call(this, channel, control, value, status, group);
-                // A tap (beatsync) on a stopped deck: also line up bars and phrases
-                if (!this.isPress(channel, control, value, status) &&
-                        PioneerDDJSB2.syncAlignsPhrases &&
-                        engine.getValue(this.group, "play") === 0 &&
-                        engine.getValue(this.group, "sync_enabled") === 0) {
-                    script.triggerControl(this.group, "phrase_sync");
+            if (!PioneerDDJSB2.syncAlignsPhrases) {
+                return;
+            }
+            // Tap = next sync step (beats, bars, next drop); hold = sync lock
+            // on/off
+            this.input = function(channel, control, value, status, _group) {
+                if (this.isPress(channel, control, value, status)) {
+                    this.longPressTimer = engine.beginTimer(this.longPressTimeout, () => {
+                        this.longPressTimer = 0;
+                        script.toggleControl(this.group, "sync_enabled");
+                    }, true);
+                } else if (this.longPressTimer) {
+                    engine.stopTimer(this.longPressTimer);
+                    this.longPressTimer = 0;
+                    script.triggerControl(this.group, "sync_step");
                 }
             };
         },

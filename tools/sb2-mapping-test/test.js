@@ -265,11 +265,21 @@ test("BANK LEDs count down the last 4 bars", () => {
     S.updateBankPadLeds(D1);
 });
 
-test("SYNC tap on a stopped deck also syncs phrases", () => {
+test("SYNC tap = next sync step; hold = sync lock on/off", () => {
     const sync = S.deck[1].syncButton;
     sync.input(0, 0x58, 0x7F, 0x90, D1);
     sync.input(0, 0x58, 0x00, 0x90, D1);
-    assert.deepStrictEqual(sets(D1, "phrase_sync").slice(0, 1), [1]);
+    assert.deepStrictEqual(sets(D1, "sync_step").slice(0, 1), [1]);
+    assert.deepStrictEqual(sets(D1, "sync_enabled"), []);
+    sync.input(0, 0x58, 0x7F, 0x90, D1); // hold
+    runTimer(sync.longPressTimer);
+    sync.input(0, 0x58, 0x00, 0x90, D1);
+    assert.deepStrictEqual(sets(D1, "sync_enabled"), [1]);
+    assert.deepStrictEqual(sets(D1, "sync_step").filter((v) => v === 1).length, 1);
+    sync.input(0, 0x58, 0x7F, 0x90, D1); // hold again: lock off
+    runTimer(sync.longPressTimer);
+    sync.input(0, 0x58, 0x00, 0x90, D1);
+    assert.deepStrictEqual(sets(D1, "sync_enabled"), [1, 0]);
 });
 
 test("SHIFT + TEMPO: key in semitones, picks up at the current key", () => {
